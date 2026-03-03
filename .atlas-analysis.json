@@ -1,0 +1,136 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "StreamSwap",
+  "projectDescription": "A CosmWasm protocol for continuous, time-based token swaps with dynamic community-driven pricing.",
+  "theme": "aspen",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#60A5FA",
+  "darkColor": "#1E40AF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/stream-lifecycle",
+              "concepts/tokenomics",
+              "concepts/pricing-mechanism",
+              "concepts/governance"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-streams",
+              "guides/subscribing",
+              "guides/managing-positions",
+              "guides/finalizing-streams",
+              "guides/pool-creation",
+              "guides/vesting"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/building",
+              "development/testing",
+              "development/typescript-sdk",
+              "development/integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview"
+            ]
+          },
+          {
+            "group": "Controller Contract",
+            "pages": [
+              "api/controller/instantiate",
+              "api/controller/execute",
+              "api/controller/query"
+            ]
+          },
+          {
+            "group": "Stream Contract",
+            "pages": [
+              "api/stream/instantiate",
+              "api/stream/execute",
+              "api/stream/query"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/stream-state",
+              "api/types/position",
+              "api/types/pool-config"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Resources",
+        "groups": [
+          {
+            "group": "Deployment",
+            "pages": [
+              "resources/deployed-contracts",
+              "resources/security"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "resources/contributing",
+              "resources/faq"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Continuous token swaps with time-based distribution",
+    "Dynamic community-driven price discovery",
+    "Multi-phase stream lifecycle (Waiting, Bootstrapping, Active, Ended, Finalized)",
+    "Automated liquidity pool creation on Osmosis",
+    "Optional vesting schedules for creators and subscribers",
+    "Threshold-based stream cancellation protection",
+    "DAO governance for protocol parameters",
+    "Exit fees and creation fees management"
+  ],
+  "publicApiSurface": [
+    "ExecuteMsg::CreateStream",
+    "ExecuteMsg::Subscribe",
+    "ExecuteMsg::Withdraw",
+    "ExecuteMsg::FinalizeStream",
+    "ExecuteMsg::ExitStream",
+    "ExecuteMsg::CancelStream",
+    "ExecuteMsg::UpdateParams",
+    "ExecuteMsg::Freeze",
+    "ExecuteMsg::Unfreeze",
+    "QueryMsg::Stream",
+    "QueryMsg::Position",
+    "QueryMsg::ListPositions",
+    "QueryMsg::AveragePrice",
+    "QueryMsg::LastStreamedPrice",
+    "QueryMsg::Params"
+  ]
+}
