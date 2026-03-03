@@ -1,0 +1,617 @@
+---
+title: Stream Execute Messages
+description: State-changing operations for Stream contracts
+icon: 'bolt'
+---
+
+## ExecuteMsg
+
+Each Stream contract supports the following execute operations:
+
+```rust
+pub enum ExecuteMsg {
+    SyncStream {},
+    Subscribe {},
+    Withdraw { cap: Option<Uint256> },
+    SyncPosition {},
+    FinalizeStream {
+        new_treasury: Option<String>,
+        create_pool: Option<CreatePool>,
+        salt: Option<Binary>,
+    },
+    ExitStream { salt: Option<Binary> },
+    CancelStream {},
+    StreamAdminCancel {},
+}
+```
+
+---
+
+## SyncStream
+
+Synchronize the stream state to reflect current time. Updates distribution calculations.
+
+### Message
+
+```json
+{
+  "sync_stream": {}
+}
+```
+
+### Behavior
+
+- Updates stream status based on current time
+- Calculates newly distributed tokens
+- Updates `out_remaining`, `spent_in`, and `dist_index`
+- Can be called by anyone
+- Automatically called by most other operations
+
+### When to Use
+
+Typically not needed manually, as other operations sync automatically. Useful for:
+- Updating on-chain state for off-chain indexers
+- Triggering status transitions
+- Getting latest prices without other actions
+
+### Example
+
+```typescript
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { sync_stream: {} },
+  "auto"
+);
+```
+
+### Errors
+
+- `OperationNotAllowed` - Stream is cancelled
+
+---
+
+## Subscribe
+
+Subscribe to a stream by depositing "in" tokens. Receives shares proportional to contribution.
+
+### Message
+
+```json
+{
+  "subscribe": {}
+}
+```
+
+### Required Funds
+
+Must send tokens matching the stream's `in_denom`:
+
+```typescript
+const funds = [{ denom: "uosmo", amount: "10000000" }]; // 10 OSMO
+
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { subscribe: {} },
+  "auto",
+  undefined,
+  funds
+);
+```
+
+### Behavior
+
+**First Subscription (New Position)**:
+- Creates new position for sender
+- Calculates shares based on contribution
+- Records Terms of Service acceptance
+- Sets initial distribution index
+
+**Subsequent Subscriptions (Existing Position)**:
+- Syncs existing position to current distribution
+- Adds new contribution to position
+- Increases share count proportionally
+
+### Share Calculation
+
+Shares are calculated to maintain fairness:
+- During **Bootstrapping**: Shares = contribution amount (1:1 ratio)
+- During **Active**: Shares adjust based on current distribution and price
+
+### When Allowed
+
+- ✅ **Bootstrapping** phase
+- ✅ **Active** phase
+- ❌ Waiting, Ended, Finalized, or Cancelled
+
+### Example: Subscribe to Stream
+
+```typescript
+import { SigningCosmWasmClient } from '@cosmjs/cosmwasm-stargate';
+
+async function subscribeToStream(
+  client: SigningCosmWasmClient,
+  senderAddress: string,
+  streamAddress: string,
+  amount: string
+) {
+  const funds = [{ denom: "uosmo", amount }];
+  
+  const result = await client.execute(
+    senderAddress,
+    streamAddress,
+    { subscribe: {} },
+    "auto",
+    undefined,
+    funds
+  );
+  
+  // Extract shares from events
+  const attrs = result.events
+    .find(e => e.type === 'wasm')
+    ?.attributes;
+    
+  const shares = attrs?.find(a => a.key === 'subscriber_shares')?.value;
+  const totalShares = attrs?.find(a => a.key === 'total_shares')?.value;
+  
+  console.log(`Received ${shares} shares`);
+  console.log(`Total stream shares: ${totalShares}`);
+  
+  return result;
+}
+```
+
+### Errors
+
+- `OperationNotAllowed` - Stream not in Bootstrapping or Active status
+- `Unauthorized` - For existing positions owned by different address
+
+---
+
+## Withdraw
+
+Withdraw unspent "in" tokens from your position. Reduces your shares proportionally.
+
+### Message
+
+```json
+{
+  "withdraw": {
+    "cap": "5000000"
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="cap" type="Uint256">
+  Optional maximum amount to withdraw. If omitted, withdraws entire balance.
+</ParamField>
+
+### Behavior
+
+- Syncs position to current distribution
+- Calculates unspent balance (not yet used to purchase tokens)
+- Sends specified amount back to sender
+- Reduces shares proportionally
+- Updates stream's `in_supply` and `shares`
+
+### When Allowed
+
+- ✅ **Bootstrapping** phase
+- ✅ **Active** phase
+- ❌ Waiting, Ended, Finalized, or Cancelled
+
+<Note>
+  You can only withdraw **unspent** balance. Tokens already spent purchasing output tokens cannot be withdrawn.
+</Note>
+
+### Example: Withdraw All
+
+```typescript
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { withdraw: {} }, // No cap = withdraw all
+  "auto"
+);
+```
+
+### Example: Withdraw Partial
+
+```typescript
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { withdraw: { cap: "5000000" } }, // Withdraw up to 5 OSMO
+  "auto"
+);
+```
+
+### Errors
+
+- `OperationNotAllowed` - Stream not in Bootstrapping or Active status
+- `WithdrawAmountExceedsBalance` - Requested more than unspent balance
+- `InvalidWithdrawAmount` - Zero amount
+
+---
+
+## SyncPosition
+
+Synchronize your position to reflect current distribution. Updates purchased and spent amounts.
+
+### Message
+
+```json
+{
+  "sync_position": {}
+}
+```
+
+### Behavior
+
+- Syncs stream state first
+- Calculates tokens purchased since last sync
+- Updates tokens spent
+- Updates position's distribution index
+- Returns purchase and spend amounts in events
+
+### When to Use
+
+- Check current position state without other actions
+- Update position for accurate queries
+- Prepare for off-chain calculations
+
+### Example
+
+```typescript
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { sync_position: {} },
+  "auto"
+);
+
+const attrs = result.events
+  .find(e => e.type === 'wasm')
+  .attributes;
+
+const purchased = attrs.find(a => a.key === 'purchased')?.value;
+const spent = attrs.find(a => a.key === 'spent')?.value;
+
+console.log(`Purchased: ${purchased}, Spent: ${spent}`);
+```
+
+### Errors
+
+- `OperationNotAllowed` - Stream is cancelled
+
+---
+
+## FinalizeStream
+
+Finalize a stream after it ends. Distributes funds to treasury and fee collector. Only callable by stream admin.
+
+### Message
+
+```json
+{
+  "finalize_stream": {
+    "new_treasury": "osmo1...",
+    "create_pool": {
+      "concentrated_liquidity": {
+        "lower_tick": -108000000,
+        "upper_tick": 108000000,
+        "tick_spacing": 100,
+        "spread_factor": "0.002"
+      }
+    },
+    "salt": "cmFuZG9tc2FsdA=="
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="new_treasury" type="string">
+  Optional different treasury address to receive funds. Uses original treasury if omitted.
+</ParamField>
+
+<ParamField path="create_pool" type="CreatePool">
+  Optional pool creation parameters. Required if stream was created with `pool_config`.
+  
+  <Expandable title="CreatePool Structure">
+    ```rust
+    pub enum CreatePool {
+        ConcentratedLiquidity {
+            lower_tick: i64,
+            upper_tick: i64,
+            tick_spacing: u64,
+            spread_factor: String,
+        },
+    }
+    ```
+    
+    <ParamField path="lower_tick" type="i64">
+      Lower price tick for concentrated liquidity position.
+    </ParamField>
+    
+    <ParamField path="upper_tick" type="i64">
+      Upper price tick for concentrated liquidity position.
+    </ParamField>
+    
+    <ParamField path="tick_spacing" type="u64">
+      Tick spacing for the pool (e.g., 100).
+    </ParamField>
+    
+    <ParamField path="spread_factor" type="string">
+      Swap fee as decimal string (e.g., "0.002" for 0.2%).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="salt" type="Binary">
+  Required if creator or subscriber vesting is configured. Used for deterministic vesting contract address.
+</ParamField>
+
+### Behavior
+
+#### Success Case (Threshold Reached)
+
+1. Syncs stream to final state
+2. Calculates revenue: `spent_in - exit_fee - pool_liquidity`
+3. Sends exit fee to fee collector
+4. Creates liquidity pool if configured
+5. Creates creator vesting contract if configured, otherwise sends revenue directly
+6. Refunds any unsold `out_asset` tokens to treasury
+7. Sets status to `Finalized(ThresholdReached)`
+
+#### Failure Case (Threshold Not Reached)
+
+1. Refunds all `out_asset` to treasury
+2. Refunds pool creation funds if applicable
+3. Sets status to `Finalized(ThresholdNotReached)`
+4. Subscribers can exit for full refund
+
+### Authorization
+
+- Only the `stream_admin` can finalize
+- Must be called after stream `end_time`
+- Returns `Unauthorized` if called by another address
+
+### Example: Basic Finalization
+
+```typescript
+const result = await client.execute(
+  adminAddress,
+  streamAddress,
+  { finalize_stream: {} },
+  "auto"
+);
+```
+
+### Example: With Pool Creation
+
+```typescript
+const result = await client.execute(
+  adminAddress,
+  streamAddress,
+  {
+    finalize_stream: {
+      create_pool: {
+        concentrated_liquidity: {
+          lower_tick: -108000000,
+          upper_tick: 108000000,
+          tick_spacing: 100,
+          spread_factor: "0.002",
+        },
+      },
+      salt: Buffer.from(randomBytes(32)).toString('base64'),
+    },
+  },
+  "auto"
+);
+```
+
+### Errors
+
+- `Unauthorized` - Caller is not stream admin
+- `OperationNotAllowed` - Stream not in Ended status
+- `InvalidPoolConfig` - Pool config mismatch
+
+---
+
+## ExitStream
+
+Exit a stream after it ends. Withdraws purchased tokens and any unspent balance.
+
+### Message
+
+```json
+{
+  "exit_stream": {
+    "salt": "cmFuZG9tc2FsdA=="
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="salt" type="Binary">
+  Required if subscriber vesting is configured. Used for deterministic vesting contract address generation.
+</ParamField>
+
+### Behavior
+
+#### Success Exit (Threshold Reached)
+
+1. Syncs position to final state
+2. Calculates exit fee: `spent * exit_fee_percent`
+3. Sends purchased `out_asset` tokens (or creates vesting contract)
+4. Sends unspent `in_denom` balance
+5. Marks position as exited
+6. Updates stream shares
+
+#### Refund Exit (Threshold Not Reached or Cancelled)
+
+1. Calculates total balance: `in_balance + spent`
+2. Sends full refund of `in_denom` tokens
+3. Marks position as exited
+4. No exit fee charged
+
+### When Allowed
+
+- ✅ **Ended** status
+- ✅ **Finalized** status
+- ✅ **Cancelled** status
+- ❌ Waiting, Bootstrapping, or Active
+
+### Example: Exit Stream
+
+```typescript
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { exit_stream: {} },
+  "auto"
+);
+
+const attrs = result.events
+  .find(e => e.type === 'wasm')
+  .attributes;
+
+const purchased = attrs.find(a => a.key === 'purchased')?.value;
+const spent = attrs.find(a => a.key === 'spent')?.value;
+const swapFee = attrs.find(a => a.key === 'swap_fee_paid')?.value;
+
+console.log(`Exited: purchased ${purchased}, spent ${spent}, fee ${swapFee}`);
+```
+
+### Example: Exit with Vesting
+
+```typescript
+import { randomBytes } from 'crypto';
+
+const salt = Buffer.from(randomBytes(32)).toString('base64');
+
+const result = await client.execute(
+  senderAddress,
+  streamAddress,
+  { exit_stream: { salt } },
+  "auto"
+);
+
+// Query vesting contract address
+const vestingAddr = await client.queryContractSmart(streamAddress, {
+  subscriber_vesting: { addr: senderAddress },
+});
+
+console.log("Vesting contract:", vestingAddr);
+```
+
+### Errors
+
+- `OperationNotAllowed` - Stream not in Ended, Finalized, or Cancelled status
+- `SubscriberAlreadyExited` - Position already exited
+
+---
+
+## CancelStream
+
+Cancel a stream (emergency circuit breaker). Only callable by protocol admin.
+
+### Message
+
+```json
+{
+  "cancel_stream": {}
+}
+```
+
+### Behavior
+
+- Sets stream status to `Cancelled`
+- All subscribers can exit for **full refund**
+- Creator receives back all `out_asset` tokens
+- No fees charged
+
+### Authorization
+
+- Only the protocol admin (from controller params) can cancel
+- Can be called at any time
+
+### Example
+
+```typescript
+const result = await client.execute(
+  protocolAdminAddress,
+  streamAddress,
+  { cancel_stream: {} },
+  "auto"
+);
+```
+
+---
+
+## StreamAdminCancel
+
+Cancel a stream by its admin. Only allowed during the Waiting phase.
+
+### Message
+
+```json
+{
+  "stream_admin_cancel": {}
+}
+```
+
+### Behavior
+
+- Sets stream status to `Cancelled`
+- Creator receives back all `out_asset` tokens and fees
+- Since no subscribers exist yet (Waiting phase), no refunds needed
+
+### When Allowed
+
+- ✅ **Waiting** status only
+- ❌ All other statuses
+
+### Authorization
+
+- Only the `stream_admin` can cancel
+- Only during Waiting phase (before bootstrapping starts)
+
+### Example
+
+```typescript
+const result = await client.execute(
+  streamAdminAddress,
+  streamAddress,
+  { stream_admin_cancel: {} },
+  "auto"
+);
+```
+
+### Errors
+
+- `Unauthorized` - Caller is not stream admin
+- `OperationNotAllowed` - Stream not in Waiting status
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Stream Queries" icon="magnifying-glass" href="/api/stream/query">
+    Query stream state and positions
+  </Card>
+  
+  <Card title="Position Type" icon="user" href="/api/types/position">
+    Understand position structure
+  </Card>
+  
+  <Card title="Stream State" icon="chart-line" href="/api/types/stream-state">
+    Learn about stream state fields
+  </Card>
+</CardGroup>

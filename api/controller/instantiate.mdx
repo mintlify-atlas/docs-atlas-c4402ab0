@@ -1,0 +1,185 @@
+---
+title: Controller Instantiation
+description: Initialize the StreamSwap Controller contract
+icon: 'rocket'
+---
+
+## InstantiateMsg
+
+The Controller contract is instantiated once to manage all streams in the protocol.
+
+### Structure
+
+```rust
+pub struct InstantiateMsg {
+    pub stream_contract_code_id: u64,
+    pub vesting_code_id: u64,
+    pub protocol_admin: Option<String>,
+    pub fee_collector: Option<String>,
+    pub stream_creation_fee: Coin,
+    pub exit_fee_percent: Decimal256,
+    pub accepted_in_denoms: Vec<String>,
+    pub min_stream_duration: u64,
+    pub min_bootstrapping_duration: u64,
+    pub min_waiting_duration: u64,
+    pub tos_version: String,
+}
+```
+
+### Parameters
+
+<ParamField path="stream_contract_code_id" type="u64" required>
+  The code ID for the stream contract template. Each new stream will be instantiated from this code.
+</ParamField>
+
+<ParamField path="vesting_code_id" type="u64" required>
+  The code ID for the vesting contract. Used to create vesting contracts for creators and subscribers.
+</ParamField>
+
+<ParamField path="protocol_admin" type="string" default="sender">
+  Address of the protocol administrator. This address has authority to:
+  - Update protocol parameters
+  - Freeze/unfreeze stream creation
+  - Emergency stream cancellation
+  
+  Defaults to the message sender if not provided.
+</ParamField>
+
+<ParamField path="fee_collector" type="string" default="protocol_admin">
+  Address that receives protocol fees:
+  - Stream creation fees
+  - Exit fees from stream participants
+  
+  Defaults to the protocol_admin if not provided.
+</ParamField>
+
+<ParamField path="stream_creation_fee" type="Coin" required>
+  Fee required to create a stream, paid by the stream creator. Must be non-zero.
+  
+  Example: `{ "denom": "uosmo", "amount": "1000000" }` (1 OSMO)
+</ParamField>
+
+<ParamField path="exit_fee_percent" type="Decimal256" required>
+  Percentage fee charged when a subscriber exits a stream. Applied to the amount spent.
+  
+  Must be between 0 and 1.0 (0% to 100%). Example: `"0.01"` for 1%.
+</ParamField>
+
+<ParamField path="accepted_in_denoms" type="Vec<String>" required>
+  List of token denominations accepted as the "in" (subscription) asset for streams.
+  
+  Example: `["ibc/...", "uosmo"]`
+</ParamField>
+
+<ParamField path="min_stream_duration" type="u64" required>
+  Minimum duration in seconds for a stream's active period (end_time - start_time).
+</ParamField>
+
+<ParamField path="min_bootstrapping_duration" type="u64" required>
+  Minimum duration in seconds for the bootstrapping phase (start_time - bootstrapping_start_time).
+</ParamField>
+
+<ParamField path="min_waiting_duration" type="u64" required>
+  Minimum duration in seconds for the waiting phase (bootstrapping_start_time - creation time).
+</ParamField>
+
+<ParamField path="tos_version" type="string" required>
+  Version identifier for the Terms of Service. Users accept this version when subscribing.
+  
+  Example: `"v1.0.0"` or a content hash
+</ParamField>
+
+## Example
+
+### Instantiate Message
+
+```json
+{
+  "stream_contract_code_id": 123,
+  "vesting_code_id": 124,
+  "protocol_admin": "osmo1...",
+  "fee_collector": "osmo1...",
+  "stream_creation_fee": {
+    "denom": "uosmo",
+    "amount": "1000000"
+  },
+  "exit_fee_percent": "0.01",
+  "accepted_in_denoms": [
+    "ibc/498A0751C798A0D9A389AA3691123DADA57DAA4FE165D5C75894505B876BA6E4",
+    "uosmo"
+  ],
+  "min_stream_duration": 86400,
+  "min_bootstrapping_duration": 3600,
+  "min_waiting_duration": 1800,
+  "tos_version": "v1.0.0"
+}
+```
+
+### Using CosmJS
+
+```typescript
+import { SigningCosmWasmClient } from '@cosmjs/cosmwasm-stargate';
+
+const instantiateMsg = {
+  stream_contract_code_id: 123,
+  vesting_code_id: 124,
+  stream_creation_fee: {
+    denom: 'uosmo',
+    amount: '1000000',
+  },
+  exit_fee_percent: '0.01',
+  accepted_in_denoms: ['uosmo'],
+  min_stream_duration: 86400,
+  min_bootstrapping_duration: 3600,
+  min_waiting_duration: 1800,
+  tos_version: 'v1.0.0',
+};
+
+const result = await client.instantiate(
+  senderAddress,
+  123, // controller code ID
+  instantiateMsg,
+  'StreamSwap Controller',
+  'auto'
+);
+
+console.log('Controller address:', result.contractAddress);
+```
+
+## Validation Rules
+
+<AccordionGroup>
+  <Accordion title="Fee Validation">
+    - `exit_fee_percent` must be between 0.0 and 1.0
+    - `stream_creation_fee.amount` must be greater than 0
+  </Accordion>
+  
+  <Accordion title="Address Validation">
+    - `protocol_admin` and `fee_collector` must be valid bech32 addresses
+    - If not provided, they default to the instantiator's address
+  </Accordion>
+  
+  <Accordion title="Duration Validation">
+    - All duration values must be positive integers (seconds)
+    - Durations are enforced when creating streams
+  </Accordion>
+</AccordionGroup>
+
+## Response
+
+On successful instantiation, the contract stores its parameters and initializes:
+- Freeze state (initially `false`)
+- Last stream ID (initially `0`)
+- Parameters in contract storage
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Execute Messages" icon="play" href="/api/controller/execute">
+    Learn how to create streams and update parameters
+  </Card>
+  
+  <Card title="Query Messages" icon="magnifying-glass" href="/api/controller/query">
+    Query controller parameters and stream registry
+  </Card>
+</CardGroup>

@@ -1,0 +1,523 @@
+---
+title: Governance & Protocol Parameters
+description: Understanding StreamSwap's governance model and protocol controls
+---
+
+StreamSwap implements a governance system that controls critical protocol parameters while maintaining decentralization and safety. The protocol admin has specific powers balanced with user protections.
+
+## Protocol Parameters
+
+All protocol parameters are defined in the `Params` struct and stored in the controller contract.
+
+### Parameters Structure
+
+```rust packages/types/src/controller/params.rs
+pub struct Params {
+    // Protocol admin, Have power to update the params and cancel streams
+    pub protocol_admin: Addr,
+    // Fee collector, address that will receive the stream creation fee
+    pub fee_collector: Addr,
+    // Stream creation fee collected from stream creator when a stream is created
+    pub stream_creation_fee: Coin,
+    // Exit fee percent, fee that will be charged when a user exit a stream
+    pub exit_fee_percent: Decimal256,
+    pub stream_contract_code_id: u64,
+    // Vesting contract code id
+    pub vesting_code_id: u64,
+    // Accepted in denoms for the stream
+    pub accepted_in_denoms: Vec<String>,
+    // Minimum time of a stream end_time - start_time
+    pub min_stream_duration: u64,
+    // Minimum time of bootstrapping status, start_time - bootstrapping_start_time
+    pub min_bootstrapping_duration: u64,
+    // Minimum time of waiting status, bootstrapping_start_time - creation_time_of_stream
+    pub min_waiting_duration: u64,
+    /// Version or hash of current terms and condition document
+    pub tos_version: String,
+}
+```
+
+### Parameter Immutability
+
+Stream-specific parameters are frozen at creation:
+
+```rust contracts/stream/src/contract.rs
+pub fn instantiate(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    msg: CreateStreamMsg,
+) -> Result<Response, ContractError> {
+    let controller_params: ControllerParams = deps
+        .querier
+        .query_wasm_smart(info.sender.to_string(), &params_query_msg)?;
+    // Controller parameters are collected at the time of stream creation
+    // Any changes to controller parameters will not affect the stream
+    CONTROLLER_PARAMS.save(deps.storage, &controller_params)?;
+    // ...
+}
+```
+
+<Info>
+When a stream is created, it captures a snapshot of the current protocol parameters. Future parameter changes do NOT affect existing streams, protecting participants from retroactive rule changes.
+</Info>
+
+## Fee Management
+
+StreamSwap implements two types of fees to support protocol sustainability.
+
+### Creation Fees
+
+Charged when a stream is created:
+
+```rust packages/types/src/controller/params.rs
+// Stream creation fee collected from stream creator when a stream is created
+pub stream_creation_fee: Coin,
+```
+
+**Purpose:**
+- Prevent spam stream creation
+- Fund protocol development
+- Support infrastructure costs
+
+**Collection:**
+- Paid by stream creator at instantiation
+- Sent to `fee_collector` address
+- Required even if stream fails
+
+### Exit Fees
+
+Charged when subscribers exit successful streams:
+
+```rust packages/types/src/controller/params.rs
+// Exit fee percent, fee that will be charged when a user exit a stream
+pub exit_fee_percent: Decimal256,
+```
+
+**Calculation:**
+
+```rust contracts/stream/src/contract.rs
+// Calculate exit fee
+let swap_fee = Decimal256::from_ratio(position.spent, Uint128::one())
+    .checked_mul(controller_params.exit_fee_percent)?
+    * Uint256::one();
+```
+
+**Formula:**
+```
+exit_fee = spent_in * exit_fee_percent
+```
+
+**Application:**
+
+During finalization:
+
+```rust contracts/stream/src/contract.rs
+// Stream's swap fee collected at fixed rate from accumulated 
+// spent_in of positions (ie stream.spent_in)
+let swap_fee = Decimal256::from_ratio(stream_state.spent_in, Uint128::one())
+    .checked_mul(controller_params.exit_fee_percent)?
+    * Uint256::one();
+
+// extract swap_fee from last amount
+creator_revenue = creator_revenue.checked_sub(swap_fee)?;
+
+// ...
+
+let swap_fee_msg = build_u128_bank_send_msg(
+    stream_state.in_denom.clone(),
+    controller_params.fee_collector.to_string(),
+    swap_fee,
+)?;
+messages.push(swap_fee_msg);
+```
+
+**Fee Distribution:**
+1. Collected from total spent_in
+2. Deducted from creator revenue
+3. Sent to fee_collector
+4. Applied only on successful (ThresholdReached) streams
+
+<Warning>
+Exit fees are ONLY charged when a stream succeeds (threshold reached). If a stream is cancelled or fails to meet its threshold, no exit fees are charged and all participants receive full refunds.
+</Warning>
+
+### Fee Updates
+
+Fees can be updated by protocol admin:
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::UpdateParams {
+    stream_creation_fee: Option<Coin>,
+    exit_fee_percent: Option<Decimal256>,
+    // ... other params
+}
+```
+
+Updates only affect future streams, not existing ones.
+
+## Accepted Denominations
+
+The protocol maintains a whitelist of accepted in denominations:
+
+```rust packages/types/src/controller/params.rs
+// Accepted in denoms for the stream
+pub accepted_in_denoms: Vec<String>,
+```
+
+**Purpose:**
+- Ensure liquidity in recognized assets
+- Prevent exotic/malicious tokens
+- Support ecosystem standards
+
+**Validation:**
+
+Checked during stream creation:
+
+```rust
+if !params.accepted_in_denoms.contains(&in_denom) {
+    return Err(ContractError::InvalidInDenom {});
+}
+```
+
+**Management:**
+
+Protocol admin can update the list:
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::UpdateParams {
+    accepted_in_denoms: Option<Vec<String>>,
+    // ...
+}
+```
+
+## Duration Requirements
+
+The protocol enforces minimum durations for each stream phase:
+
+```rust packages/types/src/controller/params.rs
+// Minimum time of a stream end_time - start_time
+pub min_stream_duration: u64,
+// Minimum time of bootstrapping status, start_time - bootstrapping_start_time
+pub min_bootstrapping_duration: u64,
+// Minimum time of waiting status, bootstrapping_start_time - creation_time_of_stream
+pub min_waiting_duration: u64,
+```
+
+### Why Minimum Durations?
+
+**min_waiting_duration:**
+- Gives time for stream discovery
+- Allows participants to prepare
+- Prevents surprise launches
+
+**min_bootstrapping_duration:**
+- Enables position establishment
+- Allows adequate participation window
+- Prevents gaming through short windows
+
+**min_stream_duration:**
+- Ensures fair price discovery
+- Prevents manipulation through short windows
+- Gives all participants adequate time
+
+### Validation
+
+Enforced during stream creation:
+
+```rust contracts/stream/src/helpers.rs
+pub fn validate_stream_times(
+    now: Timestamp,
+    bootstrapping_start_time: Timestamp,
+    start_time: Timestamp,
+    end_time: Timestamp,
+    params: &ControllerParams,
+) -> Result<(), ContractError> {
+    // Validation logic using min durations from params
+    // ...
+}
+```
+
+### Updates
+
+Protocol admin can adjust minimums:
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::UpdateParams {
+    min_stream_duration: Option<u64>,
+    min_bootstrapping_duration: Option<u64>,
+    min_waiting_duration: Option<u64>,
+    // ...
+}
+```
+
+## Freeze/Unfreeze Mechanism
+
+The protocol includes an emergency pause mechanism.
+
+### Freeze State
+
+Stops new stream creation:
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::Freeze {}
+```
+
+**Effects:**
+- No new streams can be created
+- Existing streams continue normally
+- Emergency safety measure
+- Reversible
+
+### Unfreeze
+
+Restores normal operation:
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::Unfreeze {}
+```
+
+**Requirements:**
+- Only protocol admin can freeze/unfreeze
+- Does not affect running streams
+- Immediate effect
+
+### Query Freeze State
+
+```rust packages/types/src/controller/msg.rs
+QueryMsg::Freezestate {}
+```
+
+Returns current freeze status.
+
+<Info>
+The freeze mechanism is a safety feature for protocol upgrades or emergency situations. It does NOT affect existing streams - participants can always interact with streams they've already joined.
+</Info>
+
+## Protocol Admin Role
+
+The protocol admin has specific powers and responsibilities.
+
+### Admin Powers
+
+```rust packages/types/src/controller/params.rs
+// Protocol admin, Have power to update the params and cancel streams
+pub protocol_admin: Addr,
+```
+
+**Can do:**
+1. Update protocol parameters
+2. Freeze/unfreeze stream creation
+3. Cancel streams (emergency only)
+4. Update accepted denominations
+5. Adjust minimum durations
+6. Update fee structures
+7. Change fee collector address
+
+**Cannot do:**
+- Modify existing stream parameters
+- Access stream funds
+- Override stream finalization
+- Change completed stream outcomes
+- Prevent users from exiting
+
+### Parameter Updates
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::UpdateParams {
+    min_stream_duration: Option<u64>,
+    min_bootstrapping_duration: Option<u64>,
+    min_waiting_duration: Option<u64>,
+    stream_creation_fee: Option<Coin>,
+    fee_collector: Option<String>,
+    accepted_in_denoms: Option<Vec<String>>,
+    exit_fee_percent: Option<Decimal256>,
+}
+```
+
+All parameters are optional - admin can update selectively.
+
+### Emergency Cancellation
+
+Protocol admin can cancel streams in emergencies:
+
+```rust contracts/stream/src/circuit_ops.rs
+pub fn execute_cancel_stream(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response, ContractError> {
+    // Verify sender is protocol admin
+    // Cancel stream
+    // Issue full refunds
+}
+```
+
+**Protection:**
+- All participants get full refunds
+- No fees charged
+- Complete restoration of funds
+
+### Stream Admin vs Protocol Admin
+
+**Stream Admin:**
+- Set by stream creator
+- Can cancel in Waiting state only
+- Can finalize stream when Ended
+- Stream-specific authority
+
+**Protocol Admin:**
+- Global authority
+- Can cancel any stream (emergency)
+- Updates protocol parameters
+- Cross-stream powers
+
+## Fee Collector
+
+Separate address for receiving protocol fees:
+
+```rust packages/types/src/controller/params.rs
+// Fee collector, address that will receive the stream creation fee
+pub fee_collector: Addr,
+```
+
+**Receives:**
+- All stream creation fees
+- All exit fees from successful streams
+
+**Can be updated:**
+
+```rust packages/types/src/controller/msg.rs
+ExecuteMsg::UpdateParams {
+    fee_collector: Option<String>,
+    // ...
+}
+```
+
+**Separation of concerns:**
+- Protocol admin controls governance
+- Fee collector receives revenue
+- Can be same or different addresses
+
+## Code ID Management
+
+Protocol tracks contract code IDs:
+
+```rust packages/types/src/controller/params.rs
+pub stream_contract_code_id: u64,
+pub vesting_code_id: u64,
+```
+
+**Purpose:**
+- Ensures correct contract instantiation
+- Enables upgrades via new code IDs
+- Version control
+
+**Usage:**
+
+When creating streams:
+
+```rust
+let instantiate_msg = WasmMsg::Instantiate {
+    code_id: params.stream_contract_code_id,
+    // ...
+};
+```
+
+## Terms of Service Versioning
+
+Protocol tracks ToS acceptance:
+
+```rust packages/types/src/controller/params.rs
+/// Version or hash of current terms and condition document
+pub tos_version: String,
+```
+
+**Implementation:**
+
+Streams store ToS version at creation:
+
+```rust contracts/stream/src/contract.rs
+TOS.save(deps.storage, &tos_version)?;
+```
+
+User acceptance tracked on subscription:
+
+```rust contracts/stream/src/contract.rs
+// Save signed TOS
+let tos_version = TOS.load(deps.storage)?;
+TOS_SIGNED.save(deps.storage, &info.sender, &tos_version)?;
+```
+
+**Queries:**
+
+```rust packages/types/src/stream/msg.rs
+QueryMsg::ToS { addr } => {
+    if let Some(addr) = addr {
+        // Get user's signed version
+    } else {
+        // Get stream's ToS version
+    }
+}
+```
+
+## Governance Best Practices
+
+### Parameter Updates
+
+<Warning>
+When updating parameters, consider:
+- Impact on user expectations
+- Announce changes in advance
+- Document reasoning
+- Monitor effects
+</Warning>
+
+### Emergency Procedures
+
+**When to freeze:**
+- Critical vulnerability discovered
+- Smart contract upgrade needed
+- Ecosystem-wide emergency
+
+**When to cancel streams:**
+- Exploit actively being used
+- Malicious stream detected
+- User protection necessary
+
+### Decentralization Path
+
+The protocol admin can be:
+1. Initially: Core team multisig
+2. Transitional: DAO with timelock
+3. Eventually: Full DAO governance
+
+## Security Considerations
+
+### Parameter Immutability
+
+Existing streams are protected:
+
+```rust
+// Parameters saved at stream creation
+CONTROLLER_PARAMS.save(deps.storage, &controller_params)?;
+
+// Later parameter updates don't affect this stream
+// Each stream operates under its creation-time rules
+```
+
+### Multi-signature Recommended
+
+Protocol admin should be a multisig wallet:
+- Prevents single point of failure
+- Requires consensus for changes
+- Audit trail for governance
+- Community verification
+
+### Upgrade Safety
+
+Code ID updates enable upgrades without disruption:
+- New streams use new code
+- Old streams continue on old code
+- Gradual migration
+- Parallel operation during transition

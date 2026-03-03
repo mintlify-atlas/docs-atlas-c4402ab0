@@ -1,80 +1,244 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start Guide
+description: Get up and running with StreamSwap contracts in minutes
 ---
 
-## Get started in three steps
+# Quick Start
 
-Get your documentation site running locally and make your first customization.
+This guide will help you set up your development environment, build the StreamSwap contracts, and run tests.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Before you begin, ensure you have the following installed:
+
+<Steps>
+  <Step title="Install Rust">
+    Install Rust using rustup if you haven't already:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    After installation, make sure your Rust installation is up to date:
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    rustup update
+    ```
+  </Step>
+  
+  <Step title="Add WebAssembly Target">
+    StreamSwap contracts compile to WebAssembly. Add the `wasm32-unknown-unknown` target:
+    
+    ```bash
+    rustup target add wasm32-unknown-unknown
+    ```
+    
+    <Info>
+      This target is required to compile CosmWasm smart contracts.
+    </Info>
+  </Step>
+  
+  <Step title="Clone the Repository">
+    Clone the StreamSwap contracts repository:
+    
+    ```bash
+    git clone https://github.com/StreamSwapProtocol/streamswap-contracts.git
+    cd streamswap-contracts
+    ```
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Building the Contracts
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Development Build">
+    Navigate to the workspace directory and compile the contracts:
+    
+    ```bash
+    cargo build
+    ```
+    
+    This will compile all contracts and packages in the workspace:
+    - `contracts/controller` - The controller contract
+    - `contracts/stream` - The stream contract
+    - `packages/types` - Shared type definitions
+    - `packages/interface` - Contract interfaces
+    - `packages/utils` - Utility functions
+  </Step>
+  
+  <Step title="Run Tests">
+    To ensure everything is working correctly, run the test suite:
+    
+    ```bash
+    cargo test
+    ```
+    
+    The test suite includes:
+    - Unit tests for individual functions
+    - Integration tests for contract interactions
+    - Multi-contract workflow tests
+    
+    <Note>
+      All tests should pass before proceeding to deployment.
+    </Note>
+  </Step>
+  
+  <Step title="Production Build (Optional)">
+    For a production-ready optimized build, use the provided script:
+    
+    ```bash
+    cargo run-script optimize
+    ```
+    
+    This command:
+    - Compiles contracts with optimizations enabled
+    - Reduces binary size for on-chain deployment
+    - Outputs optimized `.wasm` files to the `artifacts/` directory
+    
+    <Warning>
+      The optimize script requires Docker to be installed and running.
+    </Warning>
+  </Step>
+</Steps>
 
-### Step 3: Go live
+## Project Structure
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+After building, you'll find the following structure:
 
-## Next steps
+```
+streamswap-contracts/
+├── contracts/
+│   ├── controller/          # Controller contract source
+│   └── stream/              # Stream contract source
+├── packages/
+│   ├── interface/           # Contract interfaces
+│   ├── types/               # Shared types and messages
+│   └── utils/               # Utility functions
+├── tests/                   # Integration tests
+├── artifacts/               # Compiled .wasm files (after optimize)
+└── Cargo.toml               # Workspace configuration
+```
 
-Now that you have your docs running, explore these key features:
+## Development Workflow
+
+### Running Specific Tests
+
+To run tests for a specific contract:
+
+```bash
+# Test controller contract
+cargo test -p streamswap-controller
+
+# Test stream contract
+cargo test -p streamswap-stream
+
+# Test with output
+cargo test -- --nocapture
+```
+
+### Generating TypeScript Bindings
+
+If you need TypeScript bindings for frontend integration:
+
+```bash
+scripts/schema.sh
+```
+
+This generates JSON schemas and TypeScript types for all contract messages.
+
+### Code Generation
+
+Generate contract schemas for queries and messages:
+
+```bash
+# Generate schema for controller contract
+cargo run --bin controller-schema
+
+# Generate schema for stream contract
+cargo run --bin stream-schema
+```
+
+## Understanding the Contracts
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Controller Contract" icon="server">
+    **Key Responsibilities:**
+    - Creates new stream contracts
+    - Manages protocol parameters
+    - Collects creation fees
+    - Handles governance operations
+    
+    **Main Entry Points:**
+    - `instantiate` - Initialize the controller
+    - `execute::CreateStream` - Create a new stream
+    - `execute::UpdateParams` - Update protocol parameters
+  </Card>
+  
+  <Card title="Stream Contract" icon="water">
+    **Key Responsibilities:**
+    - Manages individual token streams
+    - Handles subscriptions and withdrawals
+    - Performs continuous distribution
+    - Executes finalization and post-stream actions
+    
+    **Main Entry Points:**
+    - `execute::Subscribe` - Join a stream
+    - `execute::Withdraw` - Withdraw unspent tokens
+    - `execute::ExitStream` - Exit after stream ends
+    - `execute::FinalizeStream` - Finalize stream
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Learn about the system architecture and design patterns.
+  </Card>
+  
+  <Card title="Stream Lifecycle" icon="timeline" href="/concepts/stream-lifecycle">
+    Understand how streams progress through different phases.
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore detailed API documentation for all contracts.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="cargo build fails with linker errors">
+    Make sure you have the latest Rust toolchain:
+    ```bash
+    rustup update
+    ```
+    
+    Also ensure the wasm32 target is installed:
+    ```bash
+    rustup target add wasm32-unknown-unknown
+    ```
+  </Accordion>
+  
+  <Accordion title="Tests fail with storage errors">
+    Try cleaning the build cache:
+    ```bash
+    cargo clean
+    cargo test
+    ```
+  </Accordion>
+  
+  <Accordion title="Optimize script fails">
+    Ensure Docker is installed and running:
+    ```bash
+    docker --version
+    docker ps
+    ```
+    
+    The optimize script uses the `cosmwasm/workspace-optimizer` Docker image.
+  </Accordion>
+</AccordionGroup>
+
+<Info>
+  For more detailed information about contract interactions and message formats, see the [API Reference](/api/overview) section.
+</Info>

@@ -1,0 +1,337 @@
+---
+title: Controller Execute Messages
+description: State-changing operations for the Controller contract
+icon: 'bolt'
+---
+
+## ExecuteMsg
+
+The Controller contract supports the following execute operations:
+
+```rust
+pub enum ExecuteMsg {
+    UpdateParams { /* ... */ },
+    CreateStream { msg: Box<CreateStreamMsg> },
+    Freeze {},
+    Unfreeze {},
+}
+```
+
+---
+
+## UpdateParams
+
+Update protocol parameters. Only callable by the protocol admin.
+
+### Message
+
+```json
+{
+  "update_params": {
+    "min_stream_duration": 86400,
+    "min_bootstrapping_duration": 3600,
+    "min_waiting_duration": 1800,
+    "stream_creation_fee": {
+      "denom": "uosmo",
+      "amount": "2000000"
+    },
+    "fee_collector": "osmo1...",
+    "accepted_in_denoms": ["uosmo"],
+    "exit_fee_percent": "0.02"
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="min_stream_duration" type="u64">
+  Minimum duration in seconds for a stream's active period.
+</ParamField>
+
+<ParamField path="min_bootstrapping_duration" type="u64">
+  Minimum duration in seconds for the bootstrapping phase.
+</ParamField>
+
+<ParamField path="min_waiting_duration" type="u64">
+  Minimum duration in seconds for the waiting phase.
+</ParamField>
+
+<ParamField path="stream_creation_fee" type="Coin">
+  New fee for creating a stream.
+</ParamField>
+
+<ParamField path="fee_collector" type="string">
+  New address for fee collection.
+</ParamField>
+
+<ParamField path="accepted_in_denoms" type="Vec<String>">
+  New list of accepted "in" token denominations.
+</ParamField>
+
+<ParamField path="exit_fee_percent" type="Decimal256">
+  New exit fee percentage (0.0 to 1.0).
+</ParamField>
+
+<Note>
+  All parameters are optional. Only provided parameters will be updated.
+</Note>
+
+### Authorization
+
+- Only the `protocol_admin` can execute this message
+- Returns `Unauthorized` error if called by another address
+
+---
+
+## CreateStream
+
+Create a new token stream. Requires payment of the stream creation fee plus the output tokens.
+
+### Message
+
+```json
+{
+  "create_stream": {
+    "msg": {
+      "treasury": "osmo1...",
+      "stream_admin": "osmo1...",
+      "name": "My Token Launch",
+      "url": "https://example.com",
+      "out_asset": {
+        "denom": "factory/osmo1.../mytoken",
+        "amount": "1000000000000"
+      },
+      "in_denom": "uosmo",
+      "bootstraping_start_time": "1735689600000000000",
+      "start_time": "1735776000000000000",
+      "end_time": "1736380800000000000",
+      "threshold": "100000000",
+      "pool_config": {
+        "concentrated_liquidity": {
+          "out_amount_clp": "500000000000"
+        }
+      },
+      "subscriber_vesting": {
+        "schedule": "saturating_linear",
+        "vesting_duration_seconds": 2592000,
+        "unbonding_duration_seconds": 86400
+      },
+      "creator_vesting": {
+        "schedule": "saturating_linear",
+        "vesting_duration_seconds": 7776000,
+        "unbonding_duration_seconds": 86400
+      },
+      "salt": "cmFuZG9tc2FsdA==",
+      "tos_version": "v1.0.0"
+    }
+  }
+}
+```
+
+### CreateStreamMsg Parameters
+
+<ParamField path="treasury" type="string" required>
+  Address that receives the "in" tokens (revenue) when the stream is finalized.
+</ParamField>
+
+<ParamField path="stream_admin" type="string" required>
+  Address authorized to:
+  - Cancel the stream during waiting phase
+  - Finalize the stream after it ends
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Human-readable name for the stream.
+</ParamField>
+
+<ParamField path="url" type="string">
+  Optional URL with additional information about the stream/project.
+</ParamField>
+
+<ParamField path="out_asset" type="Coin" required>
+  The tokens being sold/streamed to subscribers.
+  
+  Must send this amount with the message (in addition to creation fee).
+</ParamField>
+
+<ParamField path="in_denom" type="string" required>
+  Denomination of tokens accepted for subscriptions.
+  
+  Must be in the `accepted_in_denoms` list. Cannot be the same as `out_asset.denom`.
+</ParamField>
+
+<ParamField path="bootstraping_start_time" type="Timestamp" required>
+  Nanosecond timestamp when the bootstrapping phase begins.
+  
+  Must satisfy: `now + min_waiting_duration ≤ bootstraping_start_time`
+</ParamField>
+
+<ParamField path="start_time" type="Timestamp" required>
+  Nanosecond timestamp when token streaming begins (active phase).
+  
+  Must satisfy: `bootstraping_start_time + min_bootstrapping_duration ≤ start_time`
+</ParamField>
+
+<ParamField path="end_time" type="Timestamp" required>
+  Nanosecond timestamp when token streaming ends.
+  
+  Must satisfy: `start_time + min_stream_duration ≤ end_time`
+</ParamField>
+
+<ParamField path="threshold" type="Uint256">
+  Optional minimum amount of "in" tokens that must be spent for the stream to succeed.
+  
+  If not met by `end_time`, the stream fails and all subscribers receive full refunds.
+</ParamField>
+
+<ParamField path="pool_config" type="PoolConfig">
+  Optional configuration to create a liquidity pool after the stream ends.
+  
+  See [PoolConfig documentation](/api/types/pool-config) for details.
+</ParamField>
+
+<ParamField path="subscriber_vesting" type="VestingConfig">
+  Optional vesting schedule for tokens purchased by subscribers.
+  
+  If set, creates a vesting contract for each subscriber on exit.
+</ParamField>
+
+<ParamField path="creator_vesting" type="VestingConfig">
+  Optional vesting schedule for revenue received by the creator.
+  
+  If set, creates a vesting contract for the treasury on finalization.
+</ParamField>
+
+<ParamField path="salt" type="Binary" required>
+  Random bytes for deterministic contract address generation.
+  
+  Use a unique value (e.g., hash of random data) to ensure unique stream addresses.
+</ParamField>
+
+<ParamField path="tos_version" type="string" required>
+  Terms of Service version that subscribers will accept.
+  
+  Must match the current `tos_version` in controller parameters.
+</ParamField>
+
+### VestingConfig Structure
+
+```rust
+pub struct VestingConfig {
+    pub schedule: Schedule,
+    pub vesting_duration_seconds: u64,
+    pub unbonding_duration_seconds: u64,
+}
+```
+
+<ParamField path="schedule" type="Schedule">
+  Vesting schedule type:
+  - `saturating_linear` - Linear vesting over the duration
+</ParamField>
+
+<ParamField path="vesting_duration_seconds" type="u64">
+  Total duration of the vesting period in seconds.
+</ParamField>
+
+<ParamField path="unbonding_duration_seconds" type="u64">
+  Unbonding period after cancellation in seconds.
+</ParamField>
+
+### Required Funds
+
+Must send with the message:
+1. `stream_creation_fee` (e.g., 1 OSMO)
+2. `out_asset.amount` (tokens to be streamed)
+3. If `pool_config` is set: additional tokens for pool creation
+
+### Example with CosmJS
+
+```typescript
+const createStreamMsg = {
+  create_stream: {
+    msg: {
+      treasury: treasuryAddress,
+      stream_admin: adminAddress,
+      name: "My Token Launch",
+      out_asset: {
+        denom: "factory/osmo1.../mytoken",
+        amount: "1000000000000",
+      },
+      in_denom: "uosmo",
+      bootstraping_start_time: "1735689600000000000",
+      start_time: "1735776000000000000",
+      end_time: "1736380800000000000",
+      salt: Buffer.from("randomsalt").toString("base64"),
+      tos_version: "v1.0.0",
+    },
+  },
+};
+
+const funds = [
+  { denom: "uosmo", amount: "1000000" }, // creation fee
+  { denom: "factory/osmo1.../mytoken", amount: "1000000000000" }, // out tokens
+];
+
+const result = await client.execute(
+  senderAddress,
+  controllerAddress,
+  createStreamMsg,
+  "auto",
+  undefined,
+  funds
+);
+
+console.log("Stream created:", result.events);
+```
+
+---
+
+## Freeze
+
+Disable stream creation. Only callable by protocol admin.
+
+### Message
+
+```json
+{
+  "freeze": {}
+}
+```
+
+When frozen:
+- New streams cannot be created
+- Existing streams continue to operate normally
+
+### Authorization
+
+- Only the `protocol_admin` can freeze
+
+---
+
+## Unfreeze
+
+Re-enable stream creation. Only callable by protocol admin.
+
+### Message
+
+```json
+{
+  "unfreeze": {}
+}
+```
+
+### Authorization
+
+- Only the `protocol_admin` can unfreeze
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Query Messages" icon="magnifying-glass" href="/api/controller/query">
+    Query controller state and parameters
+  </Card>
+  
+  <Card title="Stream Execute" icon="water" href="/api/stream/execute">
+    Learn about stream operations
+  </Card>
+</CardGroup>

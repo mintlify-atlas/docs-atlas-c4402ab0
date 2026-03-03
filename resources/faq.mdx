@@ -1,0 +1,393 @@
+---
+title: FAQ
+description: Frequently asked questions about StreamSwap protocol
+---
+
+Find answers to common questions about StreamSwap, how it works, and how to use it.
+
+## General Questions
+
+<AccordionGroup>
+  <Accordion title="What is StreamSwap?">
+    StreamSwap is a protocol for time-based token swaps on Cosmos blockchains. It enables projects, DAOs, and users to create streams that last for a set duration and facilitate token swaps with dynamic, community-driven pricing.
+    
+    Unlike traditional token sales with fixed prices, StreamSwap determines the final price based on:
+    - Total amount of input tokens subscribed
+    - The amount of output tokens being distributed
+    - When participants enter and exit the stream
+    
+    This creates a fair, transparent mechanism for token distribution where the community determines the price through their participation.
+  </Accordion>
+  
+  <Accordion title="How is StreamSwap different from other token sales?">
+    StreamSwap differs from traditional methods in several ways:
+    
+    **vs. Fixed-Price ICOs:**
+    - StreamSwap has no predetermined price
+    - Price is determined by community participation
+    - More fair price discovery mechanism
+    
+    **vs. Dutch Auctions (Balancer LBP):**
+    - Price doesn't decrease over time
+    - Participants can enter and exit during active period
+    - Final price based on total participation, not time-based decay
+    
+    **vs. AMMs:**
+    - No initial liquidity required
+    - Continuous distribution over time
+    - Built-in vesting and pool creation options
+    
+    StreamSwap provides a continuous, fair token swap mechanism with dynamic pricing.
+  </Accordion>
+  
+  <Accordion title="Which blockchains does StreamSwap support?">
+    StreamSwap currently supports:
+    
+    - **Osmosis** (osmosis-1): OSMO, ATOM, and axlUSDC as input tokens
+    - **Injective** (injective-1): INJ as input token
+    
+    More chains and tokens will be added in future releases. The protocol is built on CosmWasm and can be deployed to any Cosmos SDK chain that supports it.
+  </Accordion>
+  
+  <Accordion title="Is StreamSwap open source?">
+    Yes! StreamSwap is fully open source under the Apache 2.0 license.
+    
+    - **GitHub**: [StreamSwapProtocol/streamswap-contracts](https://github.com/StreamSwapProtocol/streamswap-contracts)
+    - **License**: Apache 2.0
+    - **Contributions**: Community contributions are welcome
+    
+    You can review all the code, run your own tests, and even deploy your own instances of the contracts.
+  </Accordion>
+</AccordionGroup>
+
+## Stream Mechanics
+
+<AccordionGroup>
+  <Accordion title="How does pricing work?">
+    StreamSwap uses dynamic pricing determined by participation:
+    
+    **Average Price Formula:**
+    ```
+    Average Price = Total Input Spent / (Output Supply - Output Remaining)
+    ```
+    
+    **Key Points:**
+    - Price is not known until the stream ends
+    - More participation = higher price for the output token
+    - Less participation = lower price for the output token
+    - You receive tokens proportional to your share of total spending
+    
+    **Example:**
+    - Stream offers 1,000,000 PROJECT tokens
+    - 100,000 OSMO is subscribed by all participants
+    - Average price = 100,000 / 1,000,000 = 0.1 OSMO per PROJECT token
+    - If you spent 1,000 OSMO, you'd receive 10,000 PROJECT tokens
+    
+    The earlier you subscribe, the more of the distribution period you participate in, which affects your final token allocation.
+  </Accordion>
+  
+  <Accordion title="What are the different stream states?">
+    A StreamSwap stream goes through several states:
+    
+    1. **Waiting**: Stream created but not yet active. No interactions allowed.
+    
+    2. **Bootstrapping**: Participants can subscribe, but no spending occurs yet. You can withdraw your full amount during this phase.
+    
+    3. **Active**: The stream is live. Tokens are distributed continuously based on subscriptions. You can still withdraw unspent tokens.
+    
+    4. **Ended**: Distribution complete. Participants must call `exit` to claim their tokens and refund unspent input tokens.
+    
+    5. **Finalized**: Creator has finalized the stream. Vesting and liquidity pools (if configured) are set up.
+    
+    6. **Cancelled**: Stream didn't meet threshold requirements. All participants can withdraw their input tokens, creator can reclaim output tokens.
+  </Accordion>
+  
+  <Accordion title="What is the threshold, and what happens if it's not met?">
+    The **threshold** is a minimum amount of input tokens that must be subscribed for the stream to proceed.
+    
+    **If Threshold is Met:**
+    - Stream proceeds normally through all states
+    - Tokens are distributed to participants
+    - Creator receives the input tokens
+    
+    **If Threshold is NOT Met:**
+    - Stream is cancelled
+    - All participants can withdraw their full subscription amount
+    - Creator can reclaim all output tokens
+    - No fees are applied (except transaction fees)
+    
+    Thresholds protect creators from distributing tokens if there's insufficient interest, and protect participants from receiving tokens at potentially unfavorable prices due to low participation.
+  </Accordion>
+  
+  <Accordion title="How is my token allocation calculated?">
+    Your token allocation depends on:
+    
+    1. **Amount**: How much input token you subscribed
+    2. **Time**: When you subscribed and how long you stayed in
+    3. **Total Participation**: How much others subscribed
+    
+    **Share Calculation:**
+    - When you subscribe, you receive "shares" based on your amount
+    - Shares represent your portion of the total spending pool
+    - During distribution, tokens are allocated based on share percentage
+    
+    **Time Factor:**
+    - The longer your tokens are in the stream, the more of the distribution you participate in
+    - Early subscribers who stay through the end receive more tokens than late subscribers with the same amount
+    
+    **Example:**
+    - Stream runs for 10 days
+    - You subscribe 1,000 OSMO on day 0
+    - Someone else subscribes 1,000 OSMO on day 5
+    - You'll receive more tokens because you participated in the full distribution period
+  </Accordion>
+</AccordionGroup>
+
+## Participating in Streams
+
+<AccordionGroup>
+  <Accordion title="How do I subscribe to a stream?">
+    To subscribe to a stream:
+    
+    1. Find an active stream (in Waiting, Bootstrapping, or Active state)
+    2. Decide how much input token you want to commit
+    3. Send a `Subscribe` transaction with your tokens
+    4. Your tokens are locked, and you receive shares in the stream
+    
+    **Important:**
+    - Subscriptions are possible during Bootstrapping and Active states
+    - You cannot subscribe to Ended, Finalized, or Cancelled streams
+    - Make sure you have enough tokens plus transaction fees
+    - Review stream parameters before subscribing (duration, threshold, etc.)
+  </Accordion>
+  
+  <Accordion title="Can I withdraw my tokens early?">
+    Yes, you can withdraw tokens during certain phases:
+    
+    **Bootstrapping Phase:**
+    - Withdraw your full amount anytime
+    - No tokens have been spent yet
+    - No penalties or fees
+    
+    **Active Phase:**
+    - Withdraw only unspent tokens
+    - Already-spent tokens cannot be recovered
+    - Your shares are reduced proportionally
+    
+    **After Stream Ends:**
+    - Use `exit` instead of `withdraw`
+    - Claim your distributed output tokens
+    - Receive refund of any unspent input tokens
+    
+    To withdraw, send a `Withdraw` message specifying the amount. The contract will calculate how much you can withdraw based on current spending.
+  </Accordion>
+  
+  <Accordion title="When can I exit a stream?">
+    You must explicitly exit a stream after it ends to claim your tokens:
+    
+    **When to Exit:**
+    - Stream state is "Ended" or "Finalized"
+    - You've participated in the stream (subscribed tokens)
+    - You haven't already exited
+    
+    **What Happens on Exit:**
+    - Receive your share of distributed output tokens
+    - Receive refund of any unspent input tokens
+    - Exit fee is deducted (if configured)
+    - Your position is closed
+    
+    **Important:**
+    - Exiting is not automatic - you must call the `exit` function
+    - Exit fees (if any) are applied to the output tokens
+    - You can check your position at any time to see your claimable amounts
+    
+    Set reminders to exit after a stream ends to claim your tokens!
+  </Accordion>
+  
+  <Accordion title="What fees does StreamSwap charge?">
+    StreamSwap has several types of fees:
+    
+    **Creation Fee:**
+    - Paid by stream creators when creating a new stream
+    - Helps prevent spam and funds protocol development
+    - Collected and managed by DAO governance
+    
+    **Exit Fee:**
+    - Optional fee configured per stream
+    - Applied to output tokens when participants exit
+    - Set by stream creator (can be 0)
+    - Collected by the stream creator or treasury
+    
+    **Transaction Fees:**
+    - Standard blockchain gas fees
+    - Paid to validators, not StreamSwap
+    - Varies by network and transaction complexity
+    
+    **No Subscription Fees:**
+    - Subscribing to a stream has no protocol fee
+    - Only pay blockchain transaction fees
+    
+    Fee amounts are controlled by DAO governance and can be adjusted through governance proposals.
+  </Accordion>
+</AccordionGroup>
+
+## Creating Streams
+
+<AccordionGroup>
+  <Accordion title="How do I create a stream?">
+    To create a stream:
+    
+    1. **Choose Network & Token**: Select which controller contract (network and input token)
+    2. **Prepare Output Tokens**: Have your output tokens ready to deposit
+    3. **Define Parameters**:
+       - Stream name and description
+       - Start and end times
+       - Threshold amount
+       - Exit fee (if any)
+       - Vesting or pool parameters (optional)
+    4. **Submit Transaction**: Send `CreateStream` with your output tokens and creation fee
+    5. **Receive Stream Address**: Contract instantiates your stream and returns the address
+    
+    For detailed instructions, see the [Creating Streams guide](/guides/creating-streams).
+  </Accordion>
+  
+  <Accordion title="What parameters do I need to set when creating a stream?">
+    Key parameters when creating a stream:
+    
+    **Required:**
+    - **Output Token**: The token you're distributing (denom and amount)
+    - **Start Time**: When the stream becomes active
+    - **End Time**: When distribution ends
+    - **Threshold**: Minimum input tokens required to proceed
+    
+    **Optional:**
+    - **Exit Fee**: Fee percentage taken on exit (0-100%)
+    - **Bootstrapping Duration**: Time for subscriptions before spending starts
+    - **Vesting Parameters**: Lock distributed tokens with vesting schedule
+    - **Pool Parameters**: Automatically create liquidity pool after stream
+    - **URL/Description**: Metadata about your stream
+    
+    Choose parameters carefully - they cannot be changed after creation!
+  </Accordion>
+  
+  <Accordion title="Can I cancel my stream?">
+    Streams are automatically cancelled if threshold requirements aren't met. As a creator, you cannot manually cancel a stream once it's created (to protect participants).
+    
+    **Cancellation Scenarios:**
+    - Threshold not met by end of bootstrapping phase
+    - Stream never reaches active state due to low participation
+    
+    **After Cancellation:**
+    - You can call `finalize` to reclaim your output tokens
+    - Participants can withdraw their full input tokens
+    - No fees are applied (except transaction fees)
+    
+    To ensure your stream proceeds, set a realistic threshold based on expected interest.
+  </Accordion>
+  
+  <Accordion title="What happens after my stream ends?">
+    After your stream ends:
+    
+    1. **Ended State**: Stream stops distributing tokens, participants can exit
+    2. **Finalize**: You (creator) can call `finalize` to:
+       - Collect all input tokens (minus exit fees if configured)
+       - Set up vesting contracts (if configured)
+       - Create liquidity pools (if configured)
+       - Stream transitions to "Finalized" state
+    3. **Withdraw**: You can withdraw any undistributed output tokens
+    
+    **Important:**
+    - You must call `finalize` to collect your input tokens
+    - Participants must call `exit` to claim their output tokens
+    - Neither happens automatically
+  </Accordion>
+</AccordionGroup>
+
+## Technical Questions
+
+<AccordionGroup>
+  <Accordion title="Has StreamSwap been audited?">
+    The StreamSwap smart contracts are currently undergoing a security audit. The audit report will be published once completed.
+    
+    While waiting for the audit:
+    - Code is open source and can be reviewed by anyone
+    - Extensive test coverage is maintained
+    - Internal security reviews have been conducted
+    - Community testing on testnet is encouraged
+    
+    See the [Security page](/resources/security) for more information about security practices and best practices for users.
+  </Accordion>
+  
+  <Accordion title="How can I integrate StreamSwap into my dApp?">
+    StreamSwap can be integrated into your application:
+    
+    1. **TypeScript/JavaScript**: Use the generated TypeScript bindings
+    2. **Direct Contract Calls**: Interact with contracts directly via CosmWasm
+    3. **Query Functions**: Query stream state and user positions
+    4. **Event Listening**: Monitor blockchain events for stream updates
+    
+    **Resources:**
+    - [Integration Guide](/development/integration)
+    - [TypeScript SDK](/development/typescript-sdk)
+    - [Building from Source](/development/building)
+    - [API Reference](/api/overview)
+    
+    Generate TypeScript bindings by running `scripts/schema.sh` in the repository.
+  </Accordion>
+  
+  <Accordion title="Where can I find the source code?">
+    All StreamSwap code is open source:
+    
+    - **Smart Contracts**: [github.com/StreamSwapProtocol/streamswap-contracts](https://github.com/StreamSwapProtocol/streamswap-contracts)
+    - **License**: Apache 2.0
+    - **Documentation**: [docs.streamswap.io](https://docs.streamswap.io)
+    
+    You can:
+    - Review all contract code
+    - Run tests locally
+    - Build and deploy your own instances
+    - Contribute improvements
+    - Report issues
+    
+    See the [Contributing guide](/resources/contributing) to get started with development.
+  </Accordion>
+  
+  <Accordion title="How does governance work?">
+    StreamSwap is governed by a DAO:
+    
+    **Governance Controls:**
+    - Protocol parameters (fees, limits, etc.)
+    - Fee distribution and collection
+    - Emergency interventions
+    - Protocol upgrades
+    - Treasury management
+    
+    **Governance Process:**
+    - Community members propose changes
+    - Token holders vote on proposals
+    - Approved changes are implemented
+    - Transparent, on-chain decision making
+    
+    Governance ensures the protocol evolves to meet community needs while funding ongoing development.
+  </Accordion>
+</AccordionGroup>
+
+## Still Have Questions?
+
+<CardGroup cols={2}>
+  <Card title="Documentation" icon="book" href="/introduction">
+    Explore the full documentation for detailed guides and references
+  </Card>
+  
+  <Card title="GitHub" icon="github" href="https://github.com/StreamSwapProtocol/streamswap-contracts">
+    Review the source code or open an issue
+  </Card>
+  
+  <Card title="Twitter/X" icon="twitter" href="https://twitter.com/StreamSwap_io">
+    Follow for updates and announcements
+  </Card>
+  
+  <Card title="Community" icon="users" href="https://www.streamswap.io">
+    Join the StreamSwap community
+  </Card>
+</CardGroup>

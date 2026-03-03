@@ -1,0 +1,395 @@
+---
+title: Position Type
+description: Individual subscriber position structure
+icon: 'user'
+---
+
+## Overview
+
+The `Position` type represents an individual subscriber's stake in a token stream.
+
+```rust
+pub struct Position {
+    pub owner: Addr,
+    pub in_balance: Uint256,
+    pub shares: Uint256,
+    pub index: Decimal256,
+    pub last_updated: Timestamp,
+    pub purchased: Uint256,
+    pub pending_purchase: Decimal256,
+    pub spent: Uint256,
+    pub exit_date: Timestamp,
+}
+```
+
+## Fields
+
+### owner
+
+<ParamField path="owner" type="Addr">
+  **Position Owner** - Address of the subscriber who owns this position.
+</ParamField>
+
+Each address can have at most one position per stream. The owner is:
+- Set when first subscribing
+- Used for authorization of operations
+- Cannot be transferred
+
+---
+
+### in_balance
+
+<ParamField path="in_balance" type="Uint256">
+  **Unspent Balance** - Current amount of `in_denom` tokens that have not yet been spent purchasing `out_asset`.
+  
+  This balance can be withdrawn during Bootstrapping or Active phases.
+</ParamField>
+
+**Changes:**
+- ↑ Increases when subscribing (adding more tokens)
+- ↓ Decreases when withdrawing
+- ↓ Decreases as tokens are spent during streaming
+
+**Example:**
+```typescript
+// User subscribed 100 OSMO
+// Stream spent 30 OSMO buying tokens
+// in_balance = 70 OSMO (can withdraw this)
+```
+
+---
+
+### shares
+
+<ParamField path="shares" type="Uint256">
+  **Position Shares** - Number of shares this position owns.
+  
+  Shares determine the position's portion of distributed `out_asset` tokens.
+</ParamField>
+
+**Share allocation:**
+```typescript
+const positionShare = position.shares / stream.shares;
+const tokensReceived = totalDistributed * positionShare;
+```
+
+**Changes:**
+- ↑ Increases when subscribing
+- ↓ Decreases when withdrawing
+- ↓ Decreases to 0 when exiting
+
+**Fair pricing:** New shares are allocated based on current price to maintain fairness:
+```typescript
+// During active phase:
+const shareValue = stream.current_streamed_price;
+const newShares = subscriptionAmount / shareValue;
+```
+
+---
+
+### index
+
+<ParamField path="index" type="Decimal256">
+  **Distribution Index** - Position's snapshot of the stream's `dist_index`.
+  
+  Used to calculate newly purchased tokens since last sync.
+</ParamField>
+
+**How it works:**
+
+1. **Stream's `dist_index`** increases over time as tokens are distributed
+2. **Position's `index`** is a snapshot from the last sync
+3. **Difference** represents new distribution this position is entitled to
+
+**Calculation:**
+```typescript
+const indexDiff = stream.dist_index - position.index;
+const newPurchase = position.shares * indexDiff;
+position.purchased += newPurchase;
+position.index = stream.dist_index; // Update to current
+```
+
+---
+
+### last_updated
+
+<ParamField path="last_updated" type="Timestamp">
+  **Last Updated Time** - Nanosecond timestamp when position was last synchronized.
+</ParamField>
+
+Updated whenever:
+- Position is synced
+- User subscribes (adds more)
+- User withdraws
+- User exits
+
+---
+
+### purchased
+
+<ParamField path="purchased" type="Uint256">
+  **Purchased Tokens** - Total amount of `out_asset` tokens this position has purchased at the last sync.
+  
+  This is what the user receives on exit (subject to vesting if configured).
+</ParamField>
+
+**Accumulation:**
+```typescript
+// Each sync adds new purchases
+position.purchased += newPurchasedAmount;
+```
+
+**On exit:**
+```typescript
+// User receives their purchased tokens
+if (thresholdReached) {
+  sendTokens(position.owner, position.purchased);
+}
+```
+
+---
+
+### pending_purchase
+
+<ParamField path="pending_purchase" type="Decimal256">
+  **Pending Purchase (Fractional)** - Fractional token amount that couldn't be added to `purchased` due to integer truncation.
+  
+  Carried forward to prevent loss of value over time.
+</ParamField>
+
+**Why needed:**
+
+CosmWasm uses `Uint256` (integers) for token amounts. When calculating purchases:
+```typescript
+// Calculation might give: 123.456789 tokens
+const exactPurchase = shares * indexDiff; // Decimal
+
+// Split into integer and fractional parts
+position.purchased += Math.floor(exactPurchase); // 123
+position.pending_purchase = 0.456789; // Saved for next sync
+
+// Next sync includes pending:
+const nextPurchase = (shares * indexDiff) + pending_purchase;
+```
+
+This ensures no value is lost to rounding over many syncs.
+
+---
+
+### spent
+
+<ParamField path="spent" type="Uint256">
+  **Spent Tokens** - Total amount of `in_denom` tokens spent purchasing `out_asset`.
+</ParamField>
+
+**Relationship:**
+```typescript
+position.in_balance + position.spent = total_subscribed
+```
+
+**Usage:**
+- Tracks how much was used to buy tokens
+- Basis for exit fee calculation
+- Used in refund scenarios
+
+**Exit fee calculation:**
+```typescript
+const exitFee = position.spent * stream.exit_fee_percent;
+const netRevenue = position.spent - exitFee;
+```
+
+---
+
+### exit_date
+
+<ParamField path="exit_date" type="Timestamp">
+  **Exit Date** - Nanosecond timestamp when position exited the stream.
+  
+  Value is `0` if position has not exited yet.
+</ParamField>
+
+**Checking exit status:**
+```typescript
+const hasExited = position.exit_date !== "0";
+
+if (hasExited) {
+  const exitTime = new Date(Number(position.exit_date) / 1_000_000);
+  console.log(`Exited at: ${exitTime.toISOString()}`);
+}
+```
+
+**Exit scenarios:**
+
+1. **Normal Exit (Threshold Reached)**
+   - Receives `purchased` tokens (or vesting contract)
+   - Receives `in_balance` (unspent) back
+   - Pays exit fee on `spent` amount
+
+2. **Refund Exit (Threshold Not Reached / Cancelled)**
+   - Receives full refund: `in_balance + spent`
+   - No fees charged
+
+---
+
+## Position Lifecycle
+
+### 1. Creation (First Subscribe)
+
+```rust
+Position {
+    owner: sender,
+    in_balance: subscription_amount,
+    shares: calculated_shares,
+    index: stream.dist_index,
+    last_updated: now,
+    purchased: 0,
+    pending_purchase: 0,
+    spent: 0,
+    exit_date: 0,
+}
+```
+
+### 2. Active Participation
+
+As the stream runs:
+- `in_balance` decreases as tokens are spent
+- `spent` increases correspondingly
+- `purchased` increases as tokens are bought
+- `index` is updated on each sync
+
+### 3. Exit
+
+When position exits:
+- `exit_date` is set to current time
+- Tokens/refunds are distributed
+- Position remains in storage (historical record)
+
+---
+
+## Example: Query and Analyze Position
+
+```typescript
+import { SigningCosmWasmClient } from '@cosmjs/cosmwasm-stargate';
+
+async function analyzePosition(
+  client: SigningCosmWasmClient,
+  streamAddress: string,
+  ownerAddress: string
+) {
+  // Query position
+  const position = await client.queryContractSmart(streamAddress, {
+    position: { owner: ownerAddress },
+  });
+  
+  // Query stream for context
+  const stream = await client.queryContractSmart(streamAddress, {
+    stream: {},
+  });
+  
+  console.log(`\n=== Position Analysis for ${ownerAddress} ===\n`);
+  
+  // Calculate totals
+  const totalSubscribed = BigInt(position.in_balance) + BigInt(position.spent);
+  const sharePercentage = (Number(position.shares) / Number(stream.shares)) * 100;
+  
+  console.log(`Subscription:`);
+  console.log(`  Total subscribed: ${totalSubscribed}`);
+  console.log(`  Unspent balance: ${position.in_balance}`);
+  console.log(`  Spent: ${position.spent}`);
+  
+  console.log(`\nShares:`);
+  console.log(`  Position shares: ${position.shares}`);
+  console.log(`  Share of pool: ${sharePercentage.toFixed(4)}%`);
+  
+  console.log(`\nTokens:`);
+  console.log(`  Purchased: ${position.purchased}`);
+  console.log(`  Pending (fractional): ${position.pending_purchase}`);
+  
+  // Check if needs sync
+  const indexDiff = parseFloat(stream.dist_index) - parseFloat(position.index);
+  if (indexDiff > 0.000001) {
+    const pendingPurchase = Number(position.shares) * indexDiff;
+    console.log(`  Pending purchase (needs sync): ~${pendingPurchase.toFixed(6)}`);
+  }
+  
+  // Calculate average price paid
+  if (BigInt(position.purchased) > 0n) {
+    const avgPrice = Number(position.spent) / Number(position.purchased);
+    console.log(`\nAverage price paid: ${avgPrice.toFixed(6)} ${stream.in_denom} per token`);
+  }
+  
+  // Exit status
+  const hasExited = position.exit_date !== "0";
+  console.log(`\nExit Status: ${hasExited ? 'Exited' : 'Active'}`);
+  if (hasExited) {
+    const exitTime = new Date(Number(position.exit_date) / 1_000_000);
+    console.log(`Exit time: ${exitTime.toISOString()}`);
+  }
+  
+  // Last updated
+  const lastUpdate = new Date(Number(position.last_updated) / 1_000_000);
+  console.log(`\nLast updated: ${lastUpdate.toISOString()}`);
+  
+  return position;
+}
+```
+
+---
+
+## Example: Calculate Expected Exit
+
+```typescript
+async function calculateExpectedExit(
+  client: SigningCosmWasmClient,
+  streamAddress: string,
+  ownerAddress: string
+) {
+  const position = await client.queryContractSmart(streamAddress, {
+    position: { owner: ownerAddress },
+  });
+  
+  const stream = await client.queryContractSmart(streamAddress, {
+    stream: {},
+  });
+  
+  const params = await client.queryContractSmart(streamAddress, {
+    params: {},
+  });
+  
+  // Calculate with latest sync
+  const indexDiff = parseFloat(stream.dist_index) - parseFloat(position.index);
+  const additionalPurchase = Number(position.shares) * indexDiff;
+  const totalPurchased = Number(position.purchased) + additionalPurchase;
+  
+  // Calculate exit fee
+  const exitFeePercent = parseFloat(params.exit_fee_percent);
+  const exitFee = Number(position.spent) * exitFeePercent;
+  
+  console.log(`\n=== Expected Exit ===\n`);
+  console.log(`Out tokens: ${totalPurchased.toFixed(6)}`);
+  console.log(`Unspent refund: ${position.in_balance}`);
+  console.log(`Exit fee: ${exitFee.toFixed(6)} (${(exitFeePercent * 100).toFixed(2)}%)`);
+  console.log(`\nTotal Value:`);
+  console.log(`  ${totalPurchased.toFixed(6)} ${stream.out_asset.denom}`);
+  console.log(`  ${position.in_balance} ${stream.in_denom}`);
+  console.log(`  Fee: -${exitFee.toFixed(6)} ${stream.in_denom}`);
+}
+```
+
+---
+
+## Related Types
+
+<CardGroup cols={2}>
+  <Card title="StreamState" icon="chart-line" href="/api/types/stream-state">
+    Stream state structure and fields
+  </Card>
+  
+  <Card title="Stream Queries" icon="magnifying-glass" href="/api/stream/query">
+    Query positions and stream state
+  </Card>
+  
+  <Card title="Stream Execute" icon="bolt" href="/api/stream/execute">
+    Subscribe, withdraw, and exit operations
+  </Card>
+</CardGroup>

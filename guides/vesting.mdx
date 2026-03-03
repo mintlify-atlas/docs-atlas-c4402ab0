@@ -1,0 +1,618 @@
+---
+title: 'Vesting Schedules'
+description: 'Configure token vesting for creators and subscribers in StreamSwap'
+---
+
+StreamSwap supports optional vesting schedules for both creator revenue and subscriber purchased tokens. This creates long-term alignment and prevents immediate selling pressure.
+
+## Overview
+
+Vesting allows you to:
+- Lock creator revenue with gradual release over time
+- Lock subscriber purchased tokens with gradual release
+- Choose different vesting schedules for each party
+- Use proven cw-vesting contract integration
+
+<Note>
+Vesting is completely optional. Without vesting configuration, all tokens are transferred immediately during finalization/exit.
+</Note>
+
+## Vesting Configuration
+
+Vesting is configured during stream creation:
+
+```rust
+use streamswap_types::controller::{CreateStreamMsg, VestingConfig};
+use cw_vesting::vesting::Schedule;
+
+let create_stream_msg = CreateStreamMsg {
+    // ... other parameters
+    subscriber_vesting: Some(VestingConfig {
+        schedule: Schedule::SaturatingLinear,
+        vesting_duration_seconds: 86400,      // 1 day
+        unbonding_duration_seconds: 0,        // No unbonding
+    }),
+    creator_vesting: Some(VestingConfig {
+        schedule: Schedule::SaturatingLinear,
+        vesting_duration_seconds: 172800,     // 2 days
+        unbonding_duration_seconds: 0,
+    }),
+    // ...
+};
+```
+
+## VestingConfig Structure
+
+```rust
+pub struct VestingConfig {
+    pub schedule: Schedule,
+    pub vesting_duration_seconds: u64,
+    pub unbonding_duration_seconds: u64,
+}
+```
+
+### schedule
+
+The vesting release pattern:
+
+<Tabs>
+  <Tab title="SaturatingLinear">
+    Tokens are released linearly over time:
+    
+    ```rust
+    Schedule::SaturatingLinear
+    ```
+    
+    **Release pattern:**
+    - 0% at start
+    - Increases linearly each second
+    - 100% at vesting_duration_seconds
+    
+    **Example:**
+    For 1000 tokens over 100 seconds:
+    - At 10s: 100 tokens (10%)
+    - At 50s: 500 tokens (50%)
+    - At 100s: 1000 tokens (100%)
+  </Tab>
+  
+  <Tab title="Other Schedules">
+    The cw-vesting contract supports additional schedules:
+    
+    ```rust
+    // Check cw-vesting documentation for:
+    Schedule::PiecewiseLinear(curve)
+    // ... and others
+    ```
+    
+    StreamSwap passes the schedule to cw-vesting, so any supported schedule can be used.
+  </Tab>
+</Tabs>
+
+### vesting_duration_seconds
+
+Total time in seconds for complete token release:
+
+```rust
+vesting_duration_seconds: 86400  // 1 day
+vesting_duration_seconds: 604800 // 1 week
+vesting_duration_seconds: 2592000 // 30 days
+```
+
+<Warning>
+Vesting starts from the stream's `end_time`, not from finalization or exit time.
+</Warning>
+
+### unbonding_duration_seconds
+
+Optional delay before vesting begins:
+
+```rust
+// No delay - vesting starts immediately
+unbonding_duration_seconds: 0
+
+// 1 week cliff before vesting starts
+unbonding_duration_seconds: 604800
+```
+
+With unbonding:
+- No tokens available during unbonding period
+- Vesting begins after unbonding completes
+- Total time = unbonding + vesting_duration
+
+**Example:**
+```rust
+VestingConfig {
+    schedule: Schedule::SaturatingLinear,
+    vesting_duration_seconds: 2592000,    // 30 days vesting
+    unbonding_duration_seconds: 604800,   // 7 days cliff
+}
+
+// Timeline:
+// Day 0-7: No tokens available (cliff)
+// Day 7-37: Linear release over 30 days
+// Day 37+: All tokens available
+```
+
+## Creator Vesting
+
+When `creator_vesting` is configured, creator revenue goes to a vesting contract instead of direct transfer.
+
+### During Finalization
+
+<Steps>
+  <Step title="Calculate creator revenue">
+    Revenue = spent_in - exit_fee - pool_allocation
+  </Step>
+  
+  <Step title="Instantiate vesting contract">
+    Create a cw-vesting contract for the treasury address.
+  </Step>
+  
+  <Step title="Transfer revenue to vesting">
+    Send creator revenue to the vesting contract.
+  </Step>
+  
+  <Step title="Save vesting address">
+    Store vesting contract address for queries.
+  </Step>
+</Steps>
+
+**Code flow:**
+```rust
+if let Some(creator_vesting) = post_stream_actions.creator_vesting {
+    // Get vesting code checksum
+    let vesting_checksum = deps.querier
+        .query_wasm_code_info(controller_params.vesting_code_id)?
+        .checksum;
+    
+    // Instantiate vesting contract
+    let (vesting_msgs, vesting_attrs, vesting_addr) = vesting_operations(
+        &deps,
+        env.contract.address,
+        vesting_checksum,
+        treasury.clone(),
+        salt,
+        stream_state.status_info.end_time,
+        controller_params.vesting_code_id,
+        creator_revenue_u128,
+        stream_state.in_denom.clone(),
+        creator_vesting,
+    )?;
+    
+    // Save vesting contract address
+    CREATOR_VESTING.save(deps.storage, &vesting_addr)?;
+}
+```
+
+### Querying Creator Vesting
+
+```rust
+// Get creator vesting contract address
+let vesting_addr: String = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::CreatorVesting {}
+)?;
+
+// Query vesting info from cw-vesting contract
+use cw_vesting::msg::QueryMsg as VestingQueryMsg;
+use cw_vesting::vesting::Vest;
+
+let vest: Vest = app.query_wasm_smart(
+    vesting_addr.clone(),
+    &VestingQueryMsg::Info {}
+)?;
+
+println!("Recipient: {}", vest.recipient);
+println!("Denom: {:?}", vest.denom);
+println!("Status: {:?}", vest.status);
+println!("Start time: {:?}", vest.start_time);
+println!("End time: {:?}", vest.end_time);
+```
+
+### Claiming Creator Vesting
+
+The treasury address claims tokens from the vesting contract:
+
+```rust
+use cw_vesting::msg::ExecuteMsg as VestingExecuteMsg;
+
+// Distribute vested tokens
+let claim_msg = VestingExecuteMsg::Distribute { amount: None };
+
+app.execute_contract(
+    treasury_addr,
+    vesting_contract_addr,
+    &claim_msg,
+    &[]
+)?;
+```
+
+<Note>
+Only the recipient (treasury) can claim tokens. Amount defaults to all currently vested tokens if not specified.
+</Note>
+
+## Subscriber Vesting
+
+When `subscriber_vesting` is configured, each subscriber's purchased tokens go to their own vesting contract.
+
+### During Exit
+
+<Steps>
+  <Step title="Calculate purchased tokens">
+    Sync position to get final purchased amount.
+  </Step>
+  
+  <Step title="Instantiate vesting contract">
+    Create a cw-vesting contract for the subscriber.
+  </Step>
+  
+  <Step title="Transfer tokens to vesting">
+    Send purchased tokens to the vesting contract.
+  </Step>
+  
+  <Step title="Save vesting address">
+    Store vesting contract address per subscriber.
+  </Step>
+</Steps>
+
+**Code flow:**
+```rust
+if let Some(vesting_config) = post_stream_actions.subscriber_vesting {
+    let vesting_checksum = deps.querier
+        .query_wasm_code_info(controller_params.vesting_code_id)?
+        .checksum;
+    
+    let (vesting_msgs, vesting_attrs, vesting_addr) = vesting_operations(
+        &deps,
+        env.contract.address,
+        vesting_checksum,
+        info.sender.clone(),
+        salt,
+        stream_state.status_info.end_time,
+        controller_params.vesting_code_id,
+        uint128_purchased,
+        stream_state.out_asset.denom.clone(),
+        vesting_config,
+    )?;
+    
+    SUBSCRIBER_VESTING.save(deps.storage, info.sender.clone(), &vesting_addr)?;
+}
+```
+
+### Querying Subscriber Vesting
+
+```rust
+// Get subscriber's vesting contract address
+let vesting_addr: String = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::SubscriberVesting {
+        addr: subscriber.to_string()
+    }
+)?;
+
+// Query vesting info
+let vest: Vest = app.query_wasm_smart(
+    vesting_addr.clone(),
+    &VestingQueryMsg::Info {}
+)?;
+
+println!("Your vesting contract: {}", vesting_addr);
+println!("Total amount: {}", vest.amount);
+println!("Vested so far: {}", vest.vested(current_time));
+```
+
+### Claiming Subscriber Vesting
+
+Each subscriber claims from their own vesting contract:
+
+```rust
+let claim_msg = VestingExecuteMsg::Distribute { amount: None };
+
+app.execute_contract(
+    subscriber_addr,
+    vesting_contract_addr,
+    &claim_msg,
+    &[]
+)?;
+```
+
+## Salt Requirement
+
+Vesting contracts are instantiated deterministically using a salt.
+
+### For Creator Vesting
+
+Salt must be provided during finalization:
+
+```rust
+let finalize_msg = ExecuteMsg::FinalizeStream {
+    new_treasury: None,
+    create_pool: None,
+    salt: Some(Binary::from_base64("Y3JlYXRvcnNhbHQ=").unwrap()),
+};
+```
+
+### For Subscriber Vesting
+
+Salt must be provided during exit:
+
+```rust
+let exit_msg = ExecuteMsg::ExitStream {
+    salt: Some(Binary::from_base64("c3Vic2NyaWJlcnNhbHQ=").unwrap()),
+};
+```
+
+<Warning>
+If vesting is enabled but salt is not provided, the transaction will fail. Always include a random, unique salt value.
+</Warning>
+
+## Vesting Contract Details
+
+StreamSwap uses the [cw-vesting](https://github.com/DA0-DA0/dao-contracts/tree/main/contracts/external/cw-vesting) contract:
+
+### Contract Instantiation
+
+```rust
+let vesting_instantiate_msg = cw_vesting::msg::InstantiateMsg {
+    owner: None,
+    recipient: recipient_addr.to_string(),
+    title: format!("Stream addr {} released to {}", stream_addr, recipient_addr),
+    description: None,
+    total: total_amount,
+    denom: CheckedDenom::Native(denom),
+    schedule: vesting_config.schedule,
+    start_time: stream_end_time,
+    vesting_duration_seconds: vesting_config.vesting_duration_seconds,
+    unbonding_duration_seconds: vesting_config.unbonding_duration_seconds,
+};
+```
+
+### Vesting Status
+
+```rust
+pub enum Status {
+    Unfunded,   // Created but not funded
+    Funded,     // Funded and vesting
+    Canceled,   // Canceled before complete
+}
+```
+
+StreamSwap vesting contracts are always `Funded` after creation.
+
+## Real-World Example
+
+Complete vesting workflow:
+
+```rust
+use cosmwasm_std::{coin, Binary, Uint128};
+use streamswap_types::controller::{CreateStreamMsg, VestingConfig};
+use streamswap_types::stream::{ExecuteMsg, QueryMsg};
+use cw_vesting::vesting::Schedule;
+
+// === Stream Creation ===
+
+// 1. Configure vesting for both parties
+let subscriber_vesting = VestingConfig {
+    schedule: Schedule::SaturatingLinear,
+    vesting_duration_seconds: 86400,    // 1 day
+    unbonding_duration_seconds: 0,
+};
+
+let creator_vesting = VestingConfig {
+    schedule: Schedule::SaturatingLinear,
+    vesting_duration_seconds: 172800,   // 2 days
+    unbonding_duration_seconds: 604800, // 1 week cliff
+};
+
+let create_stream_msg = CreateStreamMsg {
+    treasury: treasury_addr.to_string(),
+    stream_admin: admin_addr.to_string(),
+    name: "vested-stream".to_string(),
+    out_asset: coin(1_000_000, "token"),
+    in_denom: "uosmo".to_string(),
+    subscriber_vesting: Some(subscriber_vesting),
+    creator_vesting: Some(creator_vesting),
+    // ... other params
+};
+
+// 2. Create stream
+app.execute_contract(
+    creator,
+    controller_address,
+    &ExecuteMsg::CreateStream {
+        msg: Box::new(create_stream_msg)
+    },
+    &[coin(100, "uosmo"), coin(1_000_000, "token")],
+)?;
+
+// === After Stream ===
+
+// 3. Finalize with creator vesting salt
+let finalize_msg = ExecuteMsg::FinalizeStream {
+    new_treasury: None,
+    create_pool: None,
+    salt: Some(Binary::from_base64("Y3JlYXRvcnNhbHQ=").unwrap()),
+};
+
+app.execute_contract(admin_addr, stream_address.clone(), &finalize_msg, &[])?;
+
+// 4. Query creator vesting contract
+let creator_vesting_addr: String = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::CreatorVesting {}
+)?;
+
+println!("Creator vesting: {}", creator_vesting_addr);
+
+// 5. Subscriber exits with vesting salt
+let exit_msg = ExecuteMsg::ExitStream {
+    salt: Some(Binary::from_base64("c3Vic2NyaWJlcnNhbHQ=").unwrap()),
+};
+
+app.execute_contract(subscriber.clone(), stream_address.clone(), &exit_msg, &[])?;
+
+// 6. Query subscriber vesting contract
+let subscriber_vesting_addr: String = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::SubscriberVesting {
+        addr: subscriber.to_string()
+    }
+)?;
+
+println!("Subscriber vesting: {}", subscriber_vesting_addr);
+
+// === Later: Claim Vested Tokens ===
+
+// 7. Wait for some vesting time to pass
+app.set_block_time(end_time.plus_seconds(43200)); // 12 hours later
+
+// 8. Creator claims from vesting (after cliff)
+app.set_block_time(end_time.plus_seconds(604800 + 86400)); // After cliff + 1 day
+
+let claim_msg = cw_vesting::msg::ExecuteMsg::Distribute { amount: None };
+app.execute_contract(
+    treasury_addr,
+    creator_vesting_addr.clone(),
+    &claim_msg,
+    &[]
+)?;
+
+// 9. Check how much was distributed
+let vest: cw_vesting::vesting::Vest = app.query_wasm_smart(
+    creator_vesting_addr,
+    &cw_vesting::msg::QueryMsg::Info {}
+)?;
+
+println!("Creator distributed: {}", vest.distributed);
+
+// 10. Subscriber claims (no cliff)
+app.set_block_time(end_time.plus_seconds(43200)); // 12 hours = 50% vested
+
+app.execute_contract(
+    subscriber.clone(),
+    subscriber_vesting_addr.clone(),
+    &claim_msg,
+    &[]
+)?;
+
+let vest: cw_vesting::vesting::Vest = app.query_wasm_smart(
+    subscriber_vesting_addr,
+    &cw_vesting::msg::QueryMsg::Info {}
+)?;
+
+println!("Subscriber distributed: {}", vest.distributed);
+```
+
+## Vesting Timeline
+
+### Without Unbonding
+
+```
+Stream Timeline:
+|--- Waiting ---|--- Bootstrapping ---|====== Active ======|--- Ended ---|
+                                      ^                    ^            ^
+                                   start_time          end_time    finalize
+
+Vesting Timeline:
+                                                        |====== Vesting ======|
+                                                        ^                     ^
+                                                     end_time    end_time + duration
+```
+
+### With Unbonding
+
+```
+Stream Timeline:
+|--- Waiting ---|--- Bootstrapping ---|====== Active ======|--- Ended ---|
+                                      ^                    ^            ^
+                                   start_time          end_time    finalize
+
+Vesting Timeline:
+                                                        |-- Cliff --|====== Vesting ======|
+                                                        ^           ^                     ^
+                                                     end_time   unbonding    unbonding + vesting
+```
+
+## Best Practices
+
+### Choosing Vesting Durations
+
+<Tabs>
+  <Tab title="Short Term (1-7 days)">
+    **Use for:**
+    - Small token amounts
+    - High-liquidity tokens
+    - Quick community building
+    
+    **Considerations:**
+    - Less long-term alignment
+    - Higher immediate sell pressure
+  </Tab>
+  
+  <Tab title="Medium Term (1-3 months)">
+    **Use for:**
+    - Most token launches
+    - Balanced incentive alignment
+    - Standard practice
+    
+    **Considerations:**
+    - Good balance of access and alignment
+    - Reduces immediate dumps
+  </Tab>
+  
+  <Tab title="Long Term (6-12 months)">
+    **Use for:**
+    - Large allocations
+    - Core team members
+    - Maximum long-term alignment
+    
+    **Considerations:**
+    - Strong commitment required
+    - May reduce participation
+  </Tab>
+</Tabs>
+
+### Cliff Considerations
+
+```rust
+// No cliff - Immediate gradual vesting
+unbonding_duration_seconds: 0
+
+// Short cliff - 1 week minimum commitment
+unbonding_duration_seconds: 604800
+
+// Long cliff - 1 month minimum commitment
+unbonding_duration_seconds: 2592000
+```
+
+**When to use cliffs:**
+- For creator revenue to demonstrate commitment
+- For large subscriber allocations
+- To prevent immediate token access
+
+**When to skip cliffs:**
+- For smaller amounts
+- To provide immediate partial access
+- For better user experience
+
+## Error Handling
+
+Common vesting errors:
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Missing salt | Salt required but not provided | Include salt in message |
+| Invalid schedule | Unsupported schedule type | Use supported schedule |
+| Vesting not found | Querying non-existent vesting | Check if vesting was configured |
+| Unauthorized | Wrong address claiming | Use recipient address |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Finalizing Streams" icon="flag-checkered" href="/guides/finalizing-streams">
+    See how vesting integrates with finalization
+  </Card>
+  <Card title="Creating Streams" icon="plus" href="/guides/creating-streams">
+    Configure vesting when creating streams
+  </Card>
+</CardGroup>

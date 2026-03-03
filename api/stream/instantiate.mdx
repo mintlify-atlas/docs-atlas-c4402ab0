@@ -1,0 +1,314 @@
+---
+title: Stream Instantiation
+description: How streams are instantiated via the Controller
+icon: 'rocket'
+---
+
+## Overview
+
+Stream contracts are **not instantiated directly**. Instead, they are created through the Controller contract's `CreateStream` execute message.
+
+<Info>
+  Each stream is instantiated using the `instantiate2` pattern with a user-provided salt, ensuring deterministic and unique contract addresses.
+</Info>
+
+## CreateStreamMsg Structure
+
+This message is passed to the Controller's `CreateStream` execute message:
+
+```rust
+pub struct CreateStreamMsg {
+    pub treasury: String,
+    pub stream_admin: String,
+    pub name: String,
+    pub url: Option<String>,
+    pub out_asset: Coin,
+    pub in_denom: String,
+    pub bootstraping_start_time: Timestamp,
+    pub start_time: Timestamp,
+    pub end_time: Timestamp,
+    pub threshold: Option<Uint256>,
+    pub pool_config: Option<PoolConfig>,
+    pub subscriber_vesting: Option<VestingConfig>,
+    pub creator_vesting: Option<VestingConfig>,
+    pub salt: Binary,
+    pub tos_version: String,
+}
+```
+
+## Parameters
+
+### Core Configuration
+
+<ParamField path="treasury" type="string" required>
+  Address that receives revenue ("in" tokens) when the stream is finalized.
+  
+  This is typically the project's treasury or token sale wallet.
+</ParamField>
+
+<ParamField path="stream_admin" type="string" required>
+  Address authorized to manage the stream:
+  - Cancel stream during waiting phase
+  - Finalize stream after it ends
+  - Specify pool creation parameters
+  
+  Can be the same as `treasury` or a separate admin address.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Human-readable name for the stream.
+  
+  Constraints:
+  - Must not be empty
+  - Subject to validation rules in contract
+</ParamField>
+
+<ParamField path="url" type="string">
+  Optional URL with additional information:
+  - Project website
+  - Documentation
+  - Whitepaper
+  - Social links
+</ParamField>
+
+### Token Configuration
+
+<ParamField path="out_asset" type="Coin" required>
+  The tokens being sold/distributed through the stream.
+  
+  ```json
+  {
+    "denom": "factory/osmo1.../mytoken",
+    "amount": "1000000000000"
+  }
+  ```
+  
+  - Amount must be > 0
+  - Must be sent with the transaction
+  - Cannot be the same as `in_denom`
+</ParamField>
+
+<ParamField path="in_denom" type="string" required>
+  Denomination accepted for subscriptions (payment token).
+  
+  - Must be in the controller's `accepted_in_denoms` list
+  - Cannot be the same as `out_asset.denom`
+  - Typically OSMO or USDC
+</ParamField>
+
+### Timeline Configuration
+
+<ParamField path="bootstraping_start_time" type="Timestamp" required>
+  Nanosecond timestamp when bootstrapping begins.
+  
+  During bootstrapping:
+  - Users can subscribe and withdraw
+  - No token streaming occurs
+  - Builds initial liquidity
+  
+  Must satisfy: `now + min_waiting_duration ≤ bootstraping_start_time`
+</ParamField>
+
+<ParamField path="start_time" type="Timestamp" required>
+  Nanosecond timestamp when active streaming begins.
+  
+  During active phase:
+  - Tokens are continuously distributed to subscribers
+  - Users can subscribe, withdraw, and sync positions
+  
+  Must satisfy: `bootstraping_start_time + min_bootstrapping_duration ≤ start_time`
+</ParamField>
+
+<ParamField path="end_time" type="Timestamp" required>
+  Nanosecond timestamp when streaming ends.
+  
+  After end:
+  - Stream enters "Ended" status
+  - Admin can finalize
+  - Subscribers can exit
+  
+  Must satisfy: `start_time + min_stream_duration ≤ end_time`
+</ParamField>
+
+### Success Criteria
+
+<ParamField path="threshold" type="Uint256">
+  Optional minimum amount of "in" tokens that must be **spent** (not just subscribed) for success.
+  
+  If threshold is set and not met by `end_time`:
+  - Stream fails
+  - All subscribers receive full refunds
+  - Creator receives back all `out_asset` tokens
+  
+  Example: `"100000000"` (100 OSMO in uosmo)
+</ParamField>
+
+### Post-Stream Actions
+
+<ParamField path="pool_config" type="PoolConfig">
+  Optional configuration to create a liquidity pool after the stream succeeds.
+  
+  ```json
+  {
+    "concentrated_liquidity": {
+      "out_amount_clp": "500000000000"
+    }
+  }
+  ```
+  
+  See [PoolConfig documentation](/api/types/pool-config) for details.
+  
+  <Warning>
+    If `pool_config` is set, you must send additional `out_asset` tokens and pool creation fees with the transaction.
+  </Warning>
+</ParamField>
+
+<ParamField path="subscriber_vesting" type="VestingConfig">
+  Optional vesting schedule for tokens purchased by subscribers.
+  
+  When set:
+  - Each subscriber receives a vesting contract on exit
+  - Tokens are released according to the schedule
+  - Prevents immediate dumps
+  
+  ```json
+  {
+    "schedule": "saturating_linear",
+    "vesting_duration_seconds": 2592000,
+    "unbonding_duration_seconds": 86400
+  }
+  ```
+</ParamField>
+
+<ParamField path="creator_vesting" type="VestingConfig">
+  Optional vesting schedule for revenue received by the creator.
+  
+  When set:
+  - Treasury receives a vesting contract on finalization
+  - Revenue is released according to the schedule
+  
+  ```json
+  {
+    "schedule": "saturating_linear",
+    "vesting_duration_seconds": 7776000,
+    "unbonding_duration_seconds": 86400
+  }
+  ```
+</ParamField>
+
+### Security & Compliance
+
+<ParamField path="salt" type="Binary" required>
+  Random bytes for deterministic address generation.
+  
+  Best practices:
+  - Use cryptographically random values
+  - Base64 encode for JSON: `Buffer.from(randomBytes).toString('base64')`
+  - Ensure uniqueness to avoid address collisions
+  
+  Example: `"cmFuZG9tc2FsdDEyMzQ1Njc4"`
+</ParamField>
+
+<ParamField path="tos_version" type="string" required>
+  Terms of Service version identifier.
+  
+  - Must match controller's current `tos_version`
+  - Subscribers accept this version when they subscribe
+  - Stored on-chain for each position
+</ParamField>
+
+## Instantiation Flow
+
+1. **Sender calls** Controller's `CreateStream` execute message
+2. **Controller validates**:
+   - Sender is not frozen
+   - `in_denom` is accepted
+   - `tos_version` matches
+   - Timeline constraints are met
+   - Required funds are sent
+3. **Controller instantiates** stream contract using `instantiate2`
+4. **Controller registers** stream ID and address
+5. **Stream initializes**:
+   - Stores configuration
+   - Sets initial status to `Waiting`
+   - Saves controller parameters snapshot
+
+## Example: Full Stream Creation
+
+```typescript
+import { SigningCosmWasmClient } from '@cosmjs/cosmwasm-stargate';
+import { randomBytes } from 'crypto';
+
+// Generate unique salt
+const salt = Buffer.from(randomBytes(32)).toString('base64');
+
+// Calculate timestamps (in nanoseconds)
+const now = Date.now() * 1_000_000;
+const bootstrapStart = now + 2 * 24 * 60 * 60 * 1_000_000_000; // 2 days
+const streamStart = bootstrapStart + 24 * 60 * 60 * 1_000_000_000; // +1 day
+const streamEnd = streamStart + 7 * 24 * 60 * 60 * 1_000_000_000; // +7 days
+
+const createStreamMsg = {
+  create_stream: {
+    msg: {
+      treasury: "osmo1treasury...",
+      stream_admin: "osmo1admin...",
+      name: "MYTOKEN Public Launch",
+      url: "https://mytoken.io",
+      out_asset: {
+        denom: "factory/osmo1.../mytoken",
+        amount: "1000000000000", // 1M tokens
+      },
+      in_denom: "uosmo",
+      bootstraping_start_time: bootstrapStart.toString(),
+      start_time: streamStart.toString(),
+      end_time: streamEnd.toString(),
+      threshold: "100000000", // 100 OSMO minimum
+      subscriber_vesting: {
+        schedule: "saturating_linear",
+        vesting_duration_seconds: 2592000, // 30 days
+        unbonding_duration_seconds: 86400, // 1 day
+      },
+      salt,
+      tos_version: "v1.0.0",
+    },
+  },
+};
+
+const funds = [
+  { denom: "uosmo", amount: "1000000" }, // Creation fee
+  { denom: "factory/osmo1.../mytoken", amount: "1000000000000" }, // Out tokens
+];
+
+const result = await client.execute(
+  senderAddress,
+  controllerAddress,
+  createStreamMsg,
+  "auto",
+  undefined,
+  funds
+);
+
+// Extract stream address from events
+const streamAddress = result.events
+  .find(e => e.type === 'wasm')
+  .attributes.find(a => a.key === 'stream_contract_addr').value;
+
+console.log("Stream created at:", streamAddress);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Stream Execute" icon="bolt" href="/api/stream/execute">
+    Learn how to interact with a created stream
+  </Card>
+  
+  <Card title="Stream Queries" icon="magnifying-glass" href="/api/stream/query">
+    Query stream state and positions
+  </Card>
+  
+  <Card title="PoolConfig" icon="water" href="/api/types/pool-config">
+    Configure post-stream liquidity pools
+  </Card>
+</CardGroup>

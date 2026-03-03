@@ -1,0 +1,286 @@
+---
+title: Controller Query Messages
+description: Read-only operations for the Controller contract
+icon: 'magnifying-glass'
+---
+
+## QueryMsg
+
+The Controller contract supports the following query operations:
+
+```rust
+pub enum QueryMsg {
+    Params {},
+    Freezestate {},
+    LastStreamId {},
+    ListStreams {
+        start_after: Option<u64>,
+        limit: Option<u32>,
+    },
+}
+```
+
+---
+
+## Params
+
+Retrieve the current protocol parameters.
+
+### Query
+
+```json
+{
+  "params": {}
+}
+```
+
+### Response
+
+```rust
+pub struct Params {
+    pub protocol_admin: Addr,
+    pub fee_collector: Addr,
+    pub stream_creation_fee: Coin,
+    pub exit_fee_percent: Decimal256,
+    pub stream_contract_code_id: u64,
+    pub vesting_code_id: u64,
+    pub accepted_in_denoms: Vec<String>,
+    pub min_stream_duration: u64,
+    pub min_bootstrapping_duration: u64,
+    pub min_waiting_duration: u64,
+    pub tos_version: String,
+}
+```
+
+### Response Fields
+
+<ResponseField name="protocol_admin" type="string">
+  Address of the protocol administrator.
+</ResponseField>
+
+<ResponseField name="fee_collector" type="string">
+  Address that receives protocol fees.
+</ResponseField>
+
+<ResponseField name="stream_creation_fee" type="Coin">
+  Fee required to create a new stream.
+</ResponseField>
+
+<ResponseField name="exit_fee_percent" type="Decimal256">
+  Percentage fee charged when subscribers exit (0.0 to 1.0).
+</ResponseField>
+
+<ResponseField name="stream_contract_code_id" type="u64">
+  Code ID used to instantiate new stream contracts.
+</ResponseField>
+
+<ResponseField name="vesting_code_id" type="u64">
+  Code ID used to instantiate vesting contracts.
+</ResponseField>
+
+<ResponseField name="accepted_in_denoms" type="Vec<String>">
+  List of denominations accepted for stream subscriptions.
+</ResponseField>
+
+<ResponseField name="min_stream_duration" type="u64">
+  Minimum stream duration in seconds (end_time - start_time).
+</ResponseField>
+
+<ResponseField name="min_bootstrapping_duration" type="u64">
+  Minimum bootstrapping duration in seconds (start_time - bootstrapping_start_time).
+</ResponseField>
+
+<ResponseField name="min_waiting_duration" type="u64">
+  Minimum waiting duration in seconds (bootstrapping_start_time - creation time).
+</ResponseField>
+
+<ResponseField name="tos_version" type="string">
+  Current Terms of Service version identifier.
+</ResponseField>
+
+### Example
+
+```typescript
+const params = await client.queryContractSmart(controllerAddress, {
+  params: {},
+});
+
+console.log("Stream creation fee:", params.stream_creation_fee);
+console.log("Exit fee:", params.exit_fee_percent);
+```
+
+---
+
+## Freezestate
+
+Check if stream creation is currently frozen.
+
+### Query
+
+```json
+{
+  "freezestate": {}
+}
+```
+
+### Response
+
+Returns a boolean:
+- `true` - Stream creation is frozen
+- `false` - Stream creation is enabled
+
+### Example
+
+```typescript
+const isFrozen = await client.queryContractSmart(controllerAddress, {
+  freezestate: {},
+});
+
+if (isFrozen) {
+  console.log("Stream creation is currently disabled");
+}
+```
+
+---
+
+## LastStreamId
+
+Get the ID of the most recently created stream.
+
+### Query
+
+```json
+{
+  "last_stream_id": {}
+}
+```
+
+### Response
+
+Returns a `u64` representing the last stream ID.
+
+### Example
+
+```typescript
+const lastId = await client.queryContractSmart(controllerAddress, {
+  last_stream_id: {},
+});
+
+console.log("Total streams created:", lastId);
+```
+
+---
+
+## ListStreams
+
+Retrieve a paginated list of all streams.
+
+### Query
+
+```json
+{
+  "list_streams": {
+    "start_after": 10,
+    "limit": 20
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="start_after" type="u64">
+  Optional stream ID to start pagination after. Omit to start from the beginning.
+</ParamField>
+
+<ParamField path="limit" type="u32" default="30">
+  Maximum number of streams to return. Capped at 30.
+</ParamField>
+
+### Response
+
+```rust
+pub struct StreamsResponse {
+    pub streams: Vec<StreamResponse>,
+}
+
+pub struct StreamResponse {
+    pub id: u64,
+    pub address: String,
+}
+```
+
+<ResponseField name="streams" type="Vec<StreamResponse>">
+  Array of stream information.
+  
+  <Expandable title="StreamResponse">
+    <ResponseField name="id" type="u64">
+      Unique identifier for the stream.
+    </ResponseField>
+    
+    <ResponseField name="address" type="string">
+      Contract address of the stream.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```typescript
+// Get first page of streams
+const firstPage = await client.queryContractSmart(controllerAddress, {
+  list_streams: { limit: 10 },
+});
+
+console.log("Streams:", firstPage.streams);
+
+// Get next page
+if (firstPage.streams.length === 10) {
+  const lastId = firstPage.streams[firstPage.streams.length - 1].id;
+  const nextPage = await client.queryContractSmart(controllerAddress, {
+    list_streams: {
+      start_after: lastId,
+      limit: 10,
+    },
+  });
+}
+```
+
+### Pagination Pattern
+
+```typescript
+async function getAllStreams(client, controllerAddress) {
+  const allStreams = [];
+  let startAfter = undefined;
+  
+  while (true) {
+    const response = await client.queryContractSmart(controllerAddress, {
+      list_streams: {
+        start_after: startAfter,
+        limit: 30,
+      },
+    });
+    
+    allStreams.push(...response.streams);
+    
+    if (response.streams.length < 30) {
+      break; // Last page
+    }
+    
+    startAfter = response.streams[response.streams.length - 1].id;
+  }
+  
+  return allStreams;
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Execute Messages" icon="bolt" href="/api/controller/execute">
+    Create streams and update parameters
+  </Card>
+  
+  <Card title="Stream Queries" icon="water" href="/api/stream/query">
+    Query individual stream state
+  </Card>
+</CardGroup>

@@ -1,0 +1,291 @@
+---
+title: 'Creating Streams'
+description: 'Learn how to create a StreamSwap stream with all configuration options'
+---
+
+A StreamSwap stream is created through the controller contract using the `CreateStream` message. This guide walks through the complete stream creation process.
+
+## Overview
+
+Creating a stream involves:
+
+<Steps>
+  <Step title="Prepare stream parameters">
+    Define the stream name, treasury address, stream admin, timestamps, and token denominations.
+  </Step>
+  
+  <Step title="Configure optional features">
+    Set up threshold requirements, pool configuration, and vesting schedules if needed.
+  </Step>
+  
+  <Step title="Send creation transaction">
+    Execute the CreateStream message with the required funds (creation fee + out_asset + optional pool funds).
+  </Step>
+  
+  <Step title="Receive stream contract address">
+    The controller returns the deterministically generated stream contract address.
+  </Step>
+</Steps>
+
+## Required Parameters
+
+### Basic Configuration
+
+```rust
+pub struct CreateStreamMsg {
+    pub treasury: String,
+    pub stream_admin: String,
+    pub name: String,
+    pub out_asset: Coin,
+    pub in_denom: String,
+    pub bootstraping_start_time: Timestamp,
+    pub start_time: Timestamp,
+    pub end_time: Timestamp,
+    pub salt: Binary,
+    pub tos_version: String,
+    // Optional parameters...
+}
+```
+
+#### treasury
+The address where collected `in_denom` tokens will be sent after stream finalization. The creator can withdraw their revenue here.
+
+#### stream_admin
+The address authorized to manage the stream, including:
+- Finalizing the stream after it ends
+- Canceling the stream during the waiting phase
+- Updating treasury address during finalization
+
+#### name
+Unique identifier for the stream. Must be:
+- Between 3-64 characters
+- Alphanumeric with hyphens and underscores only
+- No special characters like `~` or `ß`
+
+#### out_asset
+The token being sold in the stream:
+```rust
+Coin {
+    denom: "token_denom",
+    amount: Uint128::new(1_000_000)
+}
+```
+
+<Warning>
+The `out_asset.denom` must be different from `in_denom`. Same-denomination streams are not allowed.
+</Warning>
+
+#### in_denom
+The denomination of tokens accepted for subscription. Must be in the controller's `accepted_in_denoms` list.
+
+#### Timestamps
+
+Three timestamps define the stream lifecycle:
+
+```rust
+bootstraping_start_time: Timestamp  // When subscriptions begin
+start_time: Timestamp               // When token distribution starts
+end_time: Timestamp                 // When token distribution ends
+```
+
+**Timing Requirements:**
+- `bootstraping_start_time` must be at least `min_waiting_duration` seconds after stream creation
+- `start_time` must be at least `min_bootstrapping_duration` seconds after `bootstraping_start_time`
+- `end_time` must be at least `min_stream_duration` seconds after `start_time`
+
+#### salt
+Random binary value used for deterministic contract address generation. Should be a unique, randomly generated value.
+
+```rust
+Binary::from_base64("your_random_salt_here")
+```
+
+#### tos_version
+The terms of service version that subscribers must accept. Must match the controller's current TOS version.
+
+## Optional Parameters
+
+### url
+Optional URL pointing to additional information about the stream:
+```rust
+url: Some("https://example.com/stream-info".to_string())
+```
+
+Must be 10-255 characters if provided.
+
+### threshold
+
+Minimum amount of `in_denom` tokens required for the stream to succeed:
+
+```rust
+threshold: Some(Uint256::from(1000u128))
+```
+
+<Note>
+If the threshold is not met by `end_time`:
+- All subscribers receive full refunds
+- Creator receives back all `out_asset` tokens
+- Pool creation funds are refunded if applicable
+</Note>
+
+### pool_config
+
+Configures automatic liquidity pool creation after stream finalization:
+
+```rust
+pool_config: Some(PoolConfig::ConcentratedLiquidity {
+    out_amount_clp: Uint256::from(200_000u128)
+})
+```
+
+The `out_amount_clp` specifies how many `out_asset` tokens to allocate to the pool. A proportional amount of creator revenue (in `in_denom`) is automatically calculated.
+
+<Warning>
+When using `pool_config`, you must send additional funds:
+- Pool creation fee (query from chain parameters)
+- The `out_amount_clp` tokens in `out_asset.denom`
+</Warning>
+
+### subscriber_vesting
+
+Configures vesting for tokens purchased by subscribers:
+
+```rust
+subscriber_vesting: Some(VestingConfig {
+    schedule: Schedule::SaturatingLinear,
+    vesting_duration_seconds: 86400,
+    unbonding_duration_seconds: 0
+})
+```
+
+### creator_vesting
+
+Configures vesting for creator revenue:
+
+```rust
+creator_vesting: Some(VestingConfig {
+    schedule: Schedule::SaturatingLinear,
+    vesting_duration_seconds: 172800,
+    unbonding_duration_seconds: 0
+})
+```
+
+See the [Vesting guide](/guides/vesting) for detailed information.
+
+## Creation Fee
+
+All streams require a creation fee paid to the protocol. Query the controller for current fee:
+
+```rust
+let params: ControllerParams = querier.query_wasm_smart(
+    controller_address,
+    &QueryMsg::Params {}
+)?;
+
+// params.stream_creation_fee: Coin
+```
+
+## Complete Example
+
+Here's a complete stream creation with all features:
+
+```rust
+use cosmwasm_std::{coin, Coin, Binary, Uint256};
+use streamswap_types::controller::{
+    CreateStreamMsg, PoolConfig, VestingConfig
+};
+use cw_vesting::vesting::Schedule;
+
+// Prepare message
+let create_stream_msg = CreateStreamMsg {
+    treasury: "osmo1treasury...".to_string(),
+    stream_admin: "osmo1admin...".to_string(),
+    name: "my-token-stream".to_string(),
+    url: Some("https://myproject.com/stream".to_string()),
+    out_asset: coin(1_000_000, "token"),
+    in_denom: "uosmo".to_string(),
+    bootstraping_start_time: Timestamp::from_seconds(1704067200),
+    start_time: Timestamp::from_seconds(1704153600),
+    end_time: Timestamp::from_seconds(1704240000),
+    threshold: Some(Uint256::from(500_000u128)),
+    pool_config: Some(PoolConfig::ConcentratedLiquidity {
+        out_amount_clp: Uint256::from(200_000u128)
+    }),
+    subscriber_vesting: Some(VestingConfig {
+        schedule: Schedule::SaturatingLinear,
+        vesting_duration_seconds: 86400,
+        unbonding_duration_seconds: 0
+    }),
+    creator_vesting: Some(VestingConfig {
+        schedule: Schedule::SaturatingLinear,
+        vesting_duration_seconds: 172800,
+        unbonding_duration_seconds: 0
+    }),
+    salt: Binary::from_base64("cmFuZG9tc2FsdA==").unwrap(),
+    tos_version: "v1.0".to_string(),
+};
+
+// Prepare funds
+let funds = vec![
+    coin(100, "uosmo"),           // stream_creation_fee
+    coin(1_000_000, "token"),     // out_asset
+    coin(1_000_000, "uosmo"),     // pool_creation_fee
+    coin(200_000, "token"),       // pool out_amount_clp
+];
+
+// Execute
+let res = app.execute_contract(
+    creator_addr,
+    controller_address,
+    &ExecuteMsg::CreateStream {
+        msg: Box::new(create_stream_msg)
+    },
+    &funds
+)?;
+
+// Get stream contract address from response
+let stream_address = get_contract_address_from_res(res);
+```
+
+## Stream States
+
+After creation, the stream progresses through these states:
+
+1. **Waiting** - Before `bootstraping_start_time`, no subscriptions allowed
+2. **Bootstrapping** - Subscriptions accepted, no token distribution yet
+3. **Active** - Subscriptions accepted, tokens actively distributed
+4. **Ended** - Stream completed, awaiting finalization
+5. **Finalized** - Revenue distributed, stream closed
+6. **Cancelled** - Stream cancelled by admin or protocol
+
+## Error Handling
+
+Common errors during stream creation:
+
+| Error | Cause |
+|-------|-------|
+| `StreamNameTooShort` | Name < 3 characters |
+| `StreamNameTooLong` | Name > 64 characters |
+| `InvalidStreamName` | Invalid characters in name |
+| `SameDenomOnEachSide` | `in_denom` == `out_asset.denom` |
+| `InvalidThreshold` | Threshold is zero |
+| `StreamDurationTooShort` | Time between start and end too short |
+| `InDenomIsNotAccepted` | `in_denom` not in accepted list |
+| `InvalidToSVersion` | TOS version mismatch |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Subscribing" icon="ticket" href="/guides/subscribing">
+    Learn how users subscribe to streams
+  </Card>
+  <Card title="Managing Positions" icon="chart-line" href="/guides/managing-positions">
+    Track and manage subscriber positions
+  </Card>
+  <Card title="Finalizing Streams" icon="flag-checkered" href="/guides/finalizing-streams">
+    Complete the stream and distribute funds
+  </Card>
+  <Card title="Pool Creation" icon="water" href="/guides/pool-creation">
+    Automatically create liquidity pools
+  </Card>
+</CardGroup>

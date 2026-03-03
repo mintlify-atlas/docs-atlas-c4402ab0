@@ -1,0 +1,371 @@
+---
+title: TypeScript SDK
+description: Auto-generated TypeScript client library for StreamSwap contracts
+---
+
+## Overview
+
+StreamSwap provides auto-generated TypeScript bindings for type-safe contract interactions. The SDK includes:
+
+- Type definitions for all contract messages
+- Query and execute client classes
+- Message composer utilities
+- Full TypeScript type safety
+
+## Schema Generation
+
+Generate TypeScript bindings from contract schemas:
+
+```bash
+scripts/schema.sh
+```
+
+### Generation Process
+
+The `schema.sh` script performs the following steps:
+
+1. **Generate Schemas**: Run `cargo schema` for each contract
+2. **TypeScript Codegen**: Generate TypeScript types from JSON schemas
+3. **Cleanup**: Remove temporary schema files
+
+```bash
+#!/bin/bash
+
+# Generate schemas for all contracts
+for d in "$CONTRACTS_DIR"/*; do
+  if [ -d "$d" ]; then
+    cd "$d" || exit
+    cargo schema
+    cd "$MAIN_DIR" || exit
+  fi
+done
+
+# Generate TypeScript types
+cd "$TS_DIR" || exit
+yarn install
+yarn generate-ts
+
+# Clean up schema files
+for d in "$CONTRACTS_DIR"/*; do
+  if [ -d "$d" ]; then
+    rm -rf "$d"/schema
+  fi
+done
+```
+
+<Tip>
+  Run `scripts/schema.sh` whenever you modify contract message types to regenerate TypeScript bindings.
+</Tip>
+
+## Generated Files
+
+The TypeScript SDK is located in `ts/types/`:
+
+```
+ts/types/
+├── index.ts
+├── StreamSwapController.types.ts
+├── StreamSwapController.client.ts
+├── StreamSwapController.message-composer.ts
+├── StreamSwapStream.types.ts
+├── StreamSwapStream.client.ts
+└── StreamSwapStream.message-composer.ts
+```
+
+### File Types
+
+<CardGroup cols={3}>
+  <Card title="Types" icon="code">
+    Message and response type definitions
+  </Card>
+  <Card title="Client" icon="plug">
+    Query and execute client classes
+  </Card>
+  <Card title="Composer" icon="wand-magic-sparkles">
+    Message builder utilities
+  </Card>
+</CardGroup>
+
+## StreamSwapController Client
+
+The controller client manages stream creation and protocol parameters.
+
+### Query Client
+
+Read-only access to contract state:
+
+```typescript
+import { StreamSwapControllerQueryClient } from './types/StreamSwapController.client';
+import { CosmWasmClient } from '@cosmjs/cosmwasm-stargate';
+
+// Initialize client
+const client = await CosmWasmClient.connect('https://rpc.osmosis.zone');
+const queryClient = new StreamSwapControllerQueryClient(
+  client,
+  'osmo17kqws7fy2qnejdw68cqjlw456gdxcdukk0wq6026u826zlda3y7qdhzqlv'
+);
+
+// Query protocol parameters
+const params = await queryClient.params();
+console.log('Exit fee:', params.exit_fee_percent);
+
+// Get last stream ID
+const lastId = await queryClient.lastStreamId();
+console.log('Last stream ID:', lastId);
+
+// List all streams
+const streams = await queryClient.listStreams({
+  limit: 10,
+  startAfter: 0
+});
+console.log('Streams:', streams);
+```
+
+### Execute Client
+
+For executing transactions:
+
+```typescript
+import { StreamSwapControllerClient } from './types/StreamSwapController.client';
+import { SigningCosmWasmClient } from '@cosmjs/cosmwasm-stargate';
+import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing';
+
+// Setup signing client
+const wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic);
+const [account] = await wallet.getAccounts();
+const client = await SigningCosmWasmClient.connectWithSigner(
+  'https://rpc.osmosis.zone',
+  wallet
+);
+
+// Initialize execute client
+const executeClient = new StreamSwapControllerClient(
+  client,
+  account.address,
+  'osmo17kqws7fy2qnejdw68cqjlw456gdxcdukk0wq6026u826zlda3y7qdhzqlv'
+);
+
+// Create a new stream
+const result = await executeClient.createStream(
+  {
+    msg: {
+      name: 'My Token Sale',
+      treasury: account.address,
+      out_denom: 'factory/osmo.../mytoken',
+      in_denom: 'uosmo',
+      start_time: '1704067200000000000',
+      end_time: '1704153600000000000',
+      // ... other parameters
+    }
+  },
+  'auto',
+  undefined,
+  [{ denom: 'uosmo', amount: '100' }] // creation fee
+);
+
+console.log('Stream created:', result.transactionHash);
+```
+
+## StreamSwapStream Client
+
+The stream client handles individual stream interactions.
+
+### Query Operations
+
+Access stream and position data:
+
+```typescript
+import { StreamSwapStreamQueryClient } from './types/StreamSwapStream.client';
+
+const streamClient = new StreamSwapStreamQueryClient(
+  client,
+  'osmo1...' // stream contract address
+);
+
+// Get stream info
+const stream = await streamClient.stream();
+console.log('Stream status:', stream.status);
+console.log('Out remaining:', stream.out_remaining);
+
+// Get position
+const position = await streamClient.position({
+  owner: 'osmo1...'
+});
+console.log('Shares:', position.shares);
+console.log('Purchased:', position.purchased);
+
+// List all positions
+const positions = await streamClient.listPositions({
+  limit: 50,
+  startAfter: undefined
+});
+
+// Get pricing data
+const avgPrice = await streamClient.averagePrice();
+const lastPrice = await streamClient.lastStreamedPrice();
+```
+
+### Execute Operations
+
+Interact with streams:
+
+```typescript
+import { StreamSwapStreamClient } from './types/StreamSwapStream.client';
+
+const streamClient = new StreamSwapStreamClient(
+  client,
+  account.address,
+  'osmo1...' // stream contract address
+);
+
+// Subscribe to stream
+const subResult = await streamClient.subscribe(
+  'auto',
+  undefined,
+  [{ denom: 'uosmo', amount: '1000000' }] // subscription amount
+);
+
+// Withdraw unspent tokens
+const withdrawResult = await streamClient.withdraw(
+  { cap: '500000' }, // optional cap
+  'auto'
+);
+
+// Exit stream after it ends
+const exitResult = await streamClient.exitStream(
+  { salt: undefined },
+  'auto'
+);
+
+// Finalize stream (treasury only)
+const finalizeResult = await streamClient.finalizeStream(
+  {
+    newTreasury: undefined,
+    createPool: {
+      pool_config: {
+        // Pool configuration
+      }
+    },
+    salt: undefined
+  },
+  'auto'
+);
+```
+
+## Type Definitions
+
+All message types are fully typed:
+
+```typescript
+import type {
+  CreateStreamMsg,
+  ExecuteMsg,
+  QueryMsg,
+  StreamResponse,
+  PositionResponse,
+  Status,
+  Schedule,
+  PoolConfig,
+  VestingConfig
+} from './types/StreamSwapController.types';
+
+// Type-safe message construction
+const createMsg: CreateStreamMsg = {
+  name: 'Token Sale',
+  treasury: 'osmo1...',
+  out_supply: '1000000',
+  out_denom: 'factory/...',
+  in_denom: 'uosmo',
+  bootstrapping_start_time: Timestamp.fromSeconds(Date.now() / 1000),
+  start_time: Timestamp.fromSeconds(Date.now() / 1000 + 3600),
+  end_time: Timestamp.fromSeconds(Date.now() / 1000 + 7200),
+  // TypeScript ensures all required fields are present
+};
+```
+
+## Interface Methods
+
+### Controller Interface
+
+```typescript
+export interface StreamSwapControllerReadOnlyInterface {
+  contractAddress: string;
+  params: () => Promise<Params>;
+  freezestate: () => Promise<Boolean>;
+  lastStreamId: () => Promise<Uint64>;
+  listStreams: ({
+    limit,
+    startAfter
+  }: {
+    limit?: number;
+    startAfter?: number;
+  }) => Promise<StreamsResponse>;
+}
+
+export interface StreamSwapControllerInterface 
+  extends StreamSwapControllerReadOnlyInterface {
+  sender: string;
+  updateParams: (...) => Promise<ExecuteResult>;
+  createStream: (...) => Promise<ExecuteResult>;
+  freeze: (...) => Promise<ExecuteResult>;
+  unfreeze: (...) => Promise<ExecuteResult>;
+}
+```
+
+### Stream Interface
+
+```typescript
+export interface StreamSwapStreamReadOnlyInterface {
+  contractAddress: string;
+  params: () => Promise<Params>;
+  stream: () => Promise<StreamResponse>;
+  position: ({ owner }: { owner: string }) => Promise<PositionResponse>;
+  listPositions: (...) => Promise<PositionsResponse>;
+  averagePrice: () => Promise<AveragePriceResponse>;
+  lastStreamedPrice: () => Promise<LatestStreamedPriceResponse>;
+}
+
+export interface StreamSwapStreamInterface 
+  extends StreamSwapStreamReadOnlyInterface {
+  sender: string;
+  syncStream: (...) => Promise<ExecuteResult>;
+  subscribe: (...) => Promise<ExecuteResult>;
+  withdraw: (...) => Promise<ExecuteResult>;
+  syncPosition: (...) => Promise<ExecuteResult>;
+  finalizeStream: (...) => Promise<ExecuteResult>;
+  exitStream: (...) => Promise<ExecuteResult>;
+  cancelStream: (...) => Promise<ExecuteResult>;
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Type Safety" icon="shield-check">
+    Always use TypeScript types to catch errors at compile time
+  </Card>
+  <Card title="Client Reuse" icon="recycle">
+    Initialize clients once and reuse them for multiple operations
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation">
+    Wrap contract calls in try-catch blocks for robust error handling
+  </Card>
+  <Card title="Auto Fees" icon="calculator">
+    Use 'auto' for gas estimation in most cases
+  </Card>
+</CardGroup>
+
+<Warning>
+  TypeScript files are auto-generated. Never edit them manually - your changes will be overwritten on the next schema generation.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Integration Guide" icon="link" href="/development/integration">
+    Learn about cw-orch integration
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/controller/execute">
+    Explore the API reference
+  </Card>
+</CardGroup>

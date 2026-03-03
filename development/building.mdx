@@ -1,0 +1,150 @@
+---
+title: Building the Contracts
+description: Learn how to build StreamSwap smart contracts for development and production
+---
+
+## Prerequisites
+
+Before building the StreamSwap contracts, ensure you have the following installed:
+
+### Rust Toolchain
+
+StreamSwap contracts are written in Rust and compiled to WebAssembly (WASM). Install Rust using rustup:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### WASM Target
+
+Add the `wasm32-unknown-unknown` target to compile contracts for CosmWasm:
+
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
+## Workspace Structure
+
+StreamSwap uses a Cargo workspace with multiple packages:
+
+```toml
+[workspace]
+members = [
+    "contracts/*",
+    "packages/interface",
+    "packages/types",
+    "tests"
+]
+resolver = "2"
+```
+
+The workspace includes:
+- **contracts/**: Controller and Stream contract implementations
+- **packages/interface**: cw-orch interface for contract interactions
+- **packages/types**: Shared type definitions
+- **tests**: Integration test suite
+
+## Development Build
+
+Navigate to the workspace directory and compile all contracts:
+
+```bash
+cargo build
+```
+
+This command:
+- Builds all workspace members (contracts and packages)
+- Generates debug binaries
+- Validates that the code compiles successfully
+
+<Tip>
+  Run `cargo build` from the workspace root to build all contracts simultaneously.
+</Tip>
+
+## Production Optimization
+
+For production deployments, use the optimized build script:
+
+```bash
+cargo run-script optimize
+```
+
+### Optimization Process
+
+The optimize script uses Docker to create minimal WASM binaries:
+
+```bash
+docker run --rm -v "$(pwd)":/code \
+  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
+  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+  cosmwasm/workspace-optimizer:0.16.0
+```
+
+This process:
+- Uses the official CosmWasm optimizer image
+- Caches build artifacts for faster subsequent builds
+- Applies aggressive size optimizations
+- Ensures deterministic builds
+
+### Optimization Benefits
+
+<CardGroup cols={2}>
+  <Card title="Size Reduction" icon="compress">
+    Reduces WASM file size by 50-70% compared to debug builds
+  </Card>
+  <Card title="Gas Efficiency" icon="gas-pump">
+    Smaller binaries mean lower deployment costs on-chain
+  </Card>
+  <Card title="Deterministic" icon="fingerprint">
+    Same source code always produces identical binaries
+  </Card>
+  <Card title="Production Ready" icon="check">
+    Optimized for on-chain deployment and execution
+  </Card>
+</CardGroup>
+
+## Build Artifacts
+
+Optimized contracts are placed in the `artifacts/` directory:
+
+```
+artifacts/
+├── streamswap_controller.wasm
+├── streamswap_stream.wasm
+├── checksums.txt
+└── checksums_intermediate.txt
+```
+
+### Artifact Files
+
+- **`*.wasm`**: Optimized contract binaries ready for deployment
+- **`checksums.txt`**: SHA256 checksums for verifying build integrity
+- **`checksums_intermediate.txt`**: Checksums for intermediate build artifacts
+
+<Warning>
+  Always use optimized builds for production deployments. Debug builds are significantly larger and more expensive to deploy.
+</Warning>
+
+## Build Verification
+
+Verify your build artifacts:
+
+```bash
+# Check WASM file sizes
+ls -lh artifacts/*.wasm
+
+# Verify checksums
+cd artifacts
+sha256sum -c checksums.txt
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing" icon="flask" href="/development/testing">
+    Run unit and integration tests
+  </Card>
+  <Card title="TypeScript SDK" icon="code" href="/development/typescript-sdk">
+    Generate TypeScript bindings
+  </Card>
+</CardGroup>

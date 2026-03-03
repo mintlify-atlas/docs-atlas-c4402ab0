@@ -1,0 +1,424 @@
+---
+title: Integration Guide
+description: Integrate StreamSwap contracts using cw-orch for testing and deployment
+---
+
+## Overview
+
+cw-orch is a powerful framework for CosmWasm contract orchestration, testing, and deployment. StreamSwap provides pre-built cw-orch interfaces for seamless integration.
+
+## cw-orch Interface
+
+The `streamswap-interface` package provides cw-orch wrappers for both contracts:
+
+```rust
+// packages/interface/src/lib.rs
+#[cfg(not(target_arch = "wasm32"))]
+pub mod controller;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stream;
+```
+
+<Note>
+  The interface is only available for non-WASM targets (i.e., for testing and deployment scripts).
+</Note>
+
+## Controller Interface
+
+The controller interface wraps the StreamSwap controller contract:
+
+```rust
+use cw_orch::{interface, prelude::*};
+use streamswap_controller::contract::{execute, instantiate, migrate, query};
+use streamswap_types::controller::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+
+pub const CONTRACT_ID: &str = "streamswap_controller";
+
+#[interface(InstantiateMsg, ExecuteMsg, QueryMsg, MigrateMsg, id = CONTRACT_ID)]
+pub struct StreamSwapControllerContract;
+
+impl<Chain> Uploadable for StreamSwapControllerContract<Chain> {
+    /// Return the path to the wasm file corresponding to the contract
+    fn wasm(_chain: &ChainInfoOwned) -> WasmPath {
+        artifacts_dir_from_workspace!()
+            .find_wasm_path(CONTRACT_ID)
+            .unwrap()
+    }
+    
+    /// Returns a CosmWasm contract wrapper
+    fn wrapper() -> Box<dyn MockContract<Empty>> {
+        Box::new(
+            ContractWrapper::new_with_empty(execute, instantiate, query)
+                .with_migrate(migrate)
+        )
+    }
+}
+```
+
+### Key Features
+
+<CardGroup cols={2}>
+  <Card title="Auto WASM Loading" icon="file-code">
+    Automatically finds optimized WASM files in artifacts/
+  </Card>
+  <Card title="Mock Testing" icon="flask">
+    Provides contract wrapper for cw-multi-test
+  </Card>
+  <Card title="Type Safety" icon="shield-check">
+    Full type safety for all messages
+  </Card>
+  <Card title="Migration Support" icon="arrow-up">
+    Includes migrate functionality
+  </Card>
+</CardGroup>
+
+## Stream Interface
+
+The stream interface wraps individual stream contracts:
+
+```rust
+use cw_orch::{interface, prelude::*};
+use streamswap_controller::contract::{execute, instantiate, migrate, query};
+use streamswap_types::controller::CreateStreamMsg as InstantiateMsg;
+use streamswap_types::stream::{ExecuteMsg, MigrateMsg, QueryMsg};
+
+pub const CONTRACT_ID: &str = "streamswap_stream";
+
+#[interface(InstantiateMsg, ExecuteMsg, QueryMsg, MigrateMsg, id = CONTRACT_ID)]
+pub struct StreamSwapStreamContract;
+
+impl<Chain> Uploadable for StreamSwapStreamContract<Chain> {
+    fn wasm(_chain: &ChainInfoOwned) -> WasmPath {
+        artifacts_dir_from_workspace!()
+            .find_wasm_path(CONTRACT_ID)
+            .unwrap()
+    }
+    
+    fn wrapper() -> Box<dyn MockContract<Empty>> {
+        Box::new(
+            ContractWrapper::new_with_empty(execute, instantiate, query)
+                .with_migrate(migrate)
+        )
+    }
+}
+```
+
+## Usage Example
+
+### Testing with cw-orch
+
+```rust
+use cw_orch::prelude::*;
+use streamswap_interface::{StreamSwapControllerContract, StreamSwapStreamContract};
+use streamswap_types::controller::InstantiateMsg;
+
+#[test]
+fn test_stream_creation() {
+    // Create mock chain
+    let chain = Mock::new("sender");
+    
+    // Deploy controller
+    let controller = StreamSwapControllerContract::new(chain.clone());
+    controller.upload()?;
+    
+    // Instantiate controller
+    let init_msg = InstantiateMsg {
+        stream_code_id: stream_code_id,
+        vesting_code_id: vesting_code_id,
+        params: /* ... */,
+    };
+    controller.instantiate(&init_msg, None, None)?;
+    
+    // Create a stream
+    let create_msg = CreateStreamMsg {
+        name: "Test Stream".to_string(),
+        treasury: "treasury_addr".to_string(),
+        // ... other fields
+    };
+    
+    controller.create_stream(create_msg)?;
+    
+    // Query streams
+    let streams = controller.list_streams(None, None)?;
+    assert_eq!(streams.streams.len(), 1);
+}
+```
+
+### Mainnet Deployment
+
+```rust
+use cw_orch::prelude::*;
+use streamswap_interface::StreamSwapControllerContract;
+
+fn deploy_to_osmosis() -> anyhow::Result<()> {
+    // Connect to Osmosis mainnet
+    let network = networks::OSMOSIS_1;
+    let chain = Daemon::builder()
+        .chain(network)
+        .build()?;
+    
+    // Deploy controller
+    let controller = StreamSwapControllerContract::new(chain.clone());
+    
+    // Upload contract
+    controller.upload()?;
+    
+    // Instantiate
+    let init_msg = InstantiateMsg {
+        stream_code_id: stream_code_id,
+        vesting_code_id: vesting_code_id,
+        params: Params {
+            min_stream_duration: 3600,
+            min_bootstrapping_duration: 1800,
+            min_waiting_duration: 600,
+            exit_fee_percent: Decimal256::percent(1),
+            fee_collector: "osmo1...".to_string(),
+            stream_creation_fee: coin(100, "uosmo"),
+            accepted_in_denoms: vec!["uosmo".to_string()],
+        },
+    };
+    
+    controller.instantiate(&init_msg, Some(&admin), None)?;
+    
+    println!("Controller deployed at: {}", controller.address()?);
+    Ok(())
+}
+```
+
+## Contract Interaction Patterns
+
+### Query Messages
+
+```rust
+use streamswap_types::controller::QueryMsg;
+
+// Query using cw-orch
+let params = controller.params()?;
+let last_id = controller.last_stream_id()?;
+let streams = controller.list_streams(Some(10), None)?;
+
+// Raw query
+let params: Params = controller.query(
+    &QueryMsg::Params {}
+)?;
+```
+
+### Execute Messages
+
+```rust
+use streamswap_types::controller::ExecuteMsg;
+use cosmwasm_std::coin;
+
+// Create stream with funds
+controller.call_as(&sender).create_stream(
+    CreateStreamMsg { /* ... */ },
+    &[coin(100, "fee_denom"), coin(1_000_000, "out_denom")]
+)?;
+
+// Update params (admin only)
+controller.call_as(&admin).update_params(
+    Some(vec!["uosmo".to_string(), "uatom".to_string()]),
+    None,
+    None,
+    None,
+    None,
+    None,
+    None
+)?;
+```
+
+### Stream Interaction
+
+```rust
+use streamswap_interface::StreamSwapStreamContract;
+
+// Get stream contract
+let stream = StreamSwapStreamContract::new_with_address(
+    chain.clone(),
+    "osmo1..."
+);
+
+// Subscribe to stream
+stream.call_as(&subscriber).subscribe(
+    &[coin(1000, "in_denom")]
+)?;
+
+// Query position
+let position = stream.position(subscriber.to_string())?;
+println!("Shares: {}", position.shares);
+
+// Exit stream
+stream.call_as(&subscriber).exit_stream(None)?;
+```
+
+## Deployment Workflow
+
+### Step 1: Build Optimized Contracts
+
+```bash
+cargo run-script optimize
+```
+
+### Step 2: Upload to Chain
+
+```rust
+// Upload both contracts
+controller.upload()?;
+stream.upload()?;
+
+let controller_code_id = controller.code_id()?;
+let stream_code_id = stream.code_id()?;
+```
+
+### Step 3: Instantiate Controller
+
+```rust
+let init_msg = InstantiateMsg {
+    stream_code_id,
+    vesting_code_id,
+    params: /* configuration */,
+};
+
+controller.instantiate(&init_msg, Some(&admin), None)?;
+```
+
+### Step 4: Create First Stream
+
+```rust
+let create_msg = CreateStreamMsg {
+    name: "Initial Token Sale".to_string(),
+    // ... stream parameters
+};
+
+controller.create_stream(create_msg)?;
+```
+
+## Testing Utilities
+
+### Mock Chain Setup
+
+```rust
+use cw_orch::prelude::*;
+
+// Create mock with custom sender
+let chain = Mock::new("creator");
+
+// Set custom block time
+chain.next_block()?;
+chain.set_time(Timestamp::from_seconds(1704067200));
+
+// Query balances
+let balance = chain.query_balance(
+    &Addr::unchecked("user"),
+    "uosmo"
+)?;
+```
+
+### Multi-Contract Testing
+
+```rust
+// Deploy full system
+let controller = StreamSwapControllerContract::new(chain.clone());
+let vesting = VestingContract::new(chain.clone());
+
+controller.upload()?;
+vesting.upload()?;
+
+// Instantiate with cross-contract references
+controller.instantiate(
+    &InstantiateMsg {
+        stream_code_id: stream_code_id,
+        vesting_code_id: vesting.code_id()?,
+        params: default_params(),
+    },
+    None,
+    None
+)?;
+```
+
+## Advanced Patterns
+
+### Environment Abstraction
+
+```rust
+use cw_orch::environment::Environment;
+
+fn deploy<E: Environment>(chain: E) -> anyhow::Result<()> {
+    let controller = StreamSwapControllerContract::new(chain);
+    controller.upload()?;
+    controller.instantiate(/* ... */)?;
+    Ok(())
+}
+
+// Works with both Mock and Daemon
+deploy(Mock::new("sender"))?;
+deploy(Daemon::builder().chain(OSMOSIS_1).build()?)?;
+```
+
+### Custom Signers
+
+```rust
+// Execute as different accounts
+controller.call_as(&admin).freeze()?;
+controller.call_as(&user).create_stream(/* ... */)?;
+stream.call_as(&subscriber).subscribe(&[coin(1000, "in_denom")])?;
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Interfaces" icon="puzzle-piece">
+    Always use cw-orch interfaces for deployment and testing
+  </Card>
+  <Card title="Environment Agnostic" icon="globe">
+    Write code that works with both Mock and Daemon
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation">
+    Use Result types and handle errors gracefully
+  </Card>
+  <Card title="Test Coverage" icon="vial-circle-check">
+    Test deployment scripts with Mock before mainnet
+  </Card>
+</CardGroup>
+
+<Tip>
+  cw-orch provides a unified interface for local testing, testnet validation, and mainnet deployment.
+</Tip>
+
+## Troubleshooting
+
+### WASM Not Found
+
+If you get "WASM file not found" errors:
+
+```bash
+# Ensure optimized builds exist
+cargo run-script optimize
+
+# Check artifacts directory
+ls -la artifacts/
+```
+
+### Code ID Mismatch
+
+When code IDs don't match:
+
+```rust
+// Explicitly set code ID
+controller.set_code_id(123)?;
+
+// Or query from chain
+let code_id = chain.query_code_id(CONTRACT_ID)?;
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing Guide" icon="flask" href="/development/testing">
+    Learn about testing strategies
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/guides/deploying-contracts">
+    Deploy contracts to mainnet
+  </Card>
+</CardGroup>

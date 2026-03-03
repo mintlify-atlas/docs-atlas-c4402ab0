@@ -1,0 +1,326 @@
+---
+title: Contributing
+description: Guide for contributing to StreamSwap protocol development
+---
+
+StreamSwap is an open-source project, and we welcome contributions from the community. Whether you're fixing bugs, adding features, improving documentation, or suggesting enhancements, your help is appreciated.
+
+## Getting Started
+
+### Prerequisites
+
+Before contributing, ensure you have the following installed:
+
+<Steps>
+  <Step title="Install Rust">
+    StreamSwap is built with Rust and CosmWasm. Install Rust using rustup:
+    
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+  </Step>
+  
+  <Step title="Add WASM Target">
+    Add the WebAssembly compilation target:
+    
+    ```bash
+    rustup target add wasm32-unknown-unknown
+    ```
+  </Step>
+  
+  <Step title="Install Docker (Optional)">
+    For optimized builds, you'll need Docker:
+    
+    ```bash
+    # Follow instructions at https://docs.docker.com/get-docker/
+    ```
+  </Step>
+</Steps>
+
+### Setting Up Your Development Environment
+
+<CodeGroup>
+```bash Clone Repository
+# Fork the repository on GitHub first, then clone your fork
+git clone https://github.com/YOUR_USERNAME/streamswap-contracts.git
+cd streamswap-contracts
+```
+
+```bash Install Dependencies
+# Dependencies are managed through Cargo
+# They'll be downloaded automatically on first build
+cargo build
+```
+
+```bash Run Tests
+# Run the full test suite
+cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+```
+</CodeGroup>
+
+## Development Workflow
+
+### 1. Find or Create an Issue
+
+Before starting work:
+
+- Check existing [GitHub issues](https://github.com/StreamSwapProtocol/streamswap-contracts/issues)
+- Comment on an issue to claim it or ask questions
+- For new features, open an issue first to discuss the approach
+
+### 2. Create a Branch
+
+Create a feature branch from `main`:
+
+```bash
+git checkout -b feature/your-feature-name
+# or
+git checkout -b fix/bug-description
+```
+
+### 3. Make Your Changes
+
+Follow the project's coding standards:
+
+<AccordionGroup>
+  <Accordion title="Code Style">
+    - Follow Rust conventions and idioms
+    - Run `cargo fmt` to format your code
+    - Run `cargo clippy` to catch common mistakes
+    - Keep functions focused and well-documented
+    - Use meaningful variable and function names
+  </Accordion>
+  
+  <Accordion title="Testing Requirements">
+    - Write unit tests for new functionality
+    - Ensure existing tests still pass
+    - Add integration tests for complex features
+    - Aim for high test coverage
+    - Test edge cases and error conditions
+    
+    ```bash
+    # Run all tests
+    cargo test
+    
+    # Run specific test
+    cargo test test_name
+    
+    # Run tests with coverage (requires cargo-tarpaulin)
+    cargo tarpaulin --out Html
+    ```
+  </Accordion>
+  
+  <Accordion title="Documentation">
+    - Document public functions and modules with doc comments
+    - Update relevant documentation files
+    - Include examples in doc comments where helpful
+    - Keep comments focused on "why" not "what"
+    
+    ```rust
+    /// Subscribes a user to the stream with the specified amount.
+    ///
+    /// # Arguments
+    /// * `deps` - Mutable dependencies for state access
+    /// * `info` - Message information including sender and funds
+    ///
+    /// # Returns
+    /// Returns Response on success or ContractError on failure
+    pub fn subscribe(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
+        // implementation
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Commit Messages">
+    Write clear, concise commit messages:
+    
+    - Use present tense ("Add feature" not "Added feature")
+    - Keep first line under 50 characters
+    - Add detailed description if needed (separated by blank line)
+    - Reference issue numbers where applicable
+    
+    ```bash
+    # Good commit messages
+    git commit -m "Fix price calculation overflow in distribution"
+    git commit -m "Add support for custom exit fees (#123)"
+    
+    # Detailed commit
+    git commit -m "Refactor subscription logic for better gas efficiency
+    
+    - Move share calculation to helper function
+    - Reduce redundant state reads
+    - Add tests for gas consumption
+    
+    Closes #456"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### 4. Build and Test
+
+<CodeGroup>
+```bash Development Build
+# Standard build for development
+cargo build
+```
+
+```bash Run Tests
+# Run all tests
+cargo test
+
+# Run tests for specific package
+cargo test -p streamswap-stream
+```
+
+```bash Production Build
+# Generate optimized WASM binaries
+cargo run-script optimize
+
+# Artifacts will be in ./artifacts/
+```
+
+```bash Generate TypeScript Bindings
+# Generate TypeScript/JavaScript client code
+./scripts/schema.sh
+```
+</CodeGroup>
+
+### 5. Submit a Pull Request
+
+<Steps>
+  <Step title="Push Your Changes">
+    ```bash
+    git push origin feature/your-feature-name
+    ```
+  </Step>
+  
+  <Step title="Create Pull Request">
+    - Go to the [StreamSwap repository](https://github.com/StreamSwapProtocol/streamswap-contracts)
+    - Click "New Pull Request"
+    - Select your branch
+    - Fill out the PR template with:
+      - Description of changes
+      - Related issue numbers
+      - Testing performed
+      - Breaking changes (if any)
+  </Step>
+  
+  <Step title="Address Review Comments">
+    - Respond to reviewer feedback
+    - Make requested changes
+    - Push updates to your branch (PR will update automatically)
+    - Mark conversations as resolved when addressed
+  </Step>
+</Steps>
+
+## Pull Request Guidelines
+
+<CardGroup cols={2}>
+  <Card title="PR Requirements" icon="list-check">
+    - All tests must pass
+    - Code must be formatted (`cargo fmt`)
+    - No clippy warnings
+    - Adequate test coverage
+    - Updated documentation
+    - Clear description of changes
+  </Card>
+  
+  <Card title="Review Process" icon="magnifying-glass">
+    - Maintainers will review your PR
+    - May request changes or clarification
+    - At least one approval required
+    - All checks must pass
+    - Once approved, maintainers will merge
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+Understanding the codebase structure:
+
+```
+streamswap-contracts/
+├── contracts/
+│   ├── controller/      # Controller contract
+│   └── stream/          # Stream contract
+├── packages/
+│   ├── interface/       # Contract interfaces
+│   ├── types/          # Shared types
+│   └── utils/          # Utility functions
+├── tests/              # Integration tests
+├── scripts/            # Build and utility scripts
+└── artifacts/          # Compiled WASM binaries (generated)
+```
+
+## What to Contribute
+
+<AccordionGroup>
+  <Accordion title="Bug Fixes">
+    Found a bug? We'd love your help fixing it:
+    - Check if it's already reported
+    - Create an issue with reproduction steps
+    - Submit a PR with the fix and tests
+  </Accordion>
+  
+  <Accordion title="New Features">
+    Have an idea for a new feature?
+    - Open an issue to discuss it first
+    - Get feedback from maintainers
+    - Implement with tests and documentation
+    - Submit PR for review
+  </Accordion>
+  
+  <Accordion title="Documentation">
+    Help improve documentation:
+    - Fix typos or unclear explanations
+    - Add examples and tutorials
+    - Improve code comments
+    - Translate documentation
+  </Accordion>
+  
+  <Accordion title="Testing">
+    Improve test coverage:
+    - Add tests for untested code paths
+    - Create integration test scenarios
+    - Test edge cases
+    - Add fuzzing tests
+  </Accordion>
+  
+  <Accordion title="Performance">
+    Optimize the codebase:
+    - Reduce gas consumption
+    - Improve execution efficiency
+    - Optimize storage patterns
+    - Profile and benchmark changes
+  </Accordion>
+</AccordionGroup>
+
+## Code of Conduct
+
+We are committed to providing a welcoming and inclusive environment:
+
+- Be respectful and considerate
+- Welcome newcomers and help them learn
+- Focus on what's best for the project
+- Show empathy towards other community members
+- Accept constructive criticism gracefully
+
+## Getting Help
+
+If you need help or have questions:
+
+- **GitHub Issues**: For bug reports and feature requests
+- **GitHub Discussions**: For general questions and discussions
+- **Twitter/X**: [@StreamSwap_io](https://twitter.com/StreamSwap_io)
+- **Documentation**: [docs.streamswap.io](https://docs.streamswap.io)
+
+## License
+
+By contributing to StreamSwap, you agree that your contributions will be licensed under the Apache 2.0 License.
+
+<Info>
+  Thank you for contributing to StreamSwap! Your efforts help make the protocol better for everyone.
+</Info>

@@ -1,0 +1,108 @@
+---
+title: Introduction to StreamSwap
+description: A protocol for time-based token swaps with continuous distribution and dynamic community-driven pricing
+---
+
+# Welcome to StreamSwap
+
+StreamSwap is a protocol designed for time-based token swaps, enabling projects, DAOs, and users to create streams that last for a set duration and facilitate continuous token distribution.
+
+## What is StreamSwap?
+
+StreamSwap introduces a **continuous token swap mechanism** that allows dynamic price determination by the community, based on the final swap amount and time. Unlike traditional token exchange methods, StreamSwap distributes tokens continuously over a defined period, creating a fair and transparent distribution process.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Continuous Distribution" icon="water">
+    Tokens are distributed continuously over time based on total shares and subscription timing, ensuring fair allocation throughout the stream lifecycle.
+  </Card>
+  
+  <Card title="Dynamic Pricing" icon="chart-line">
+    Community-driven price discovery based on final swap amounts and time, with real-time average and streamed price calculations.
+  </Card>
+  
+  <Card title="Multi-Phase Lifecycle" icon="circle-nodes">
+    Streams progress through distinct phases: Waiting, Bootstrapping, Active, Ended, Finalized, or Cancelled - each with specific participant actions.
+  </Card>
+  
+  <Card title="Flexible Subscriptions" icon="arrows-rotate">
+    Subscribe during bootstrapping or active phases, withdraw unspent tokens, and exit streams after completion with proportional share calculations.
+  </Card>
+  
+  <Card title="Vesting & Pool Creation" icon="lock">
+    Optional post-stream actions including automated vesting schedules for creators and subscribers, plus liquidity pool creation.
+  </Card>
+  
+  <Card title="Threshold Protection" icon="shield">
+    Optional minimum raise thresholds ensure streams only finalize when target amounts are met, protecting both creators and participants.
+  </Card>
+</CardGroup>
+
+## Why StreamSwap?
+
+Traditional token exchange mechanisms have limitations:
+
+- **Automated ICOs**: Fixed prices set by teams without community input
+- **Centralized ICOs**: Require KYC and regulatory compliance through third parties
+- **Dutch Auctions**: Price decreases over time, potentially unfair to early participants
+
+StreamSwap addresses these limitations by:
+
+1. **Enabling continuous participation** throughout the stream duration
+2. **Creating fair price discovery** based on total demand and timing
+3. **Providing transparency** with on-chain execution and real-time metrics
+4. **Offering flexibility** with withdrawals, vesting, and pool creation options
+
+## Core Components
+
+StreamSwap's architecture consists of two main smart contracts:
+
+<CardGroup cols={2}>
+  <Card title="Controller Contract" icon="server" href="/architecture#controller-contract">
+    Manages stream creation, protocol-level parameters, fee collection, and governance operations.
+  </Card>
+  
+  <Card title="Stream Contract" icon="water" href="/architecture#stream-contract">
+    Implements individual stream logic including subscriptions, distribution, exits, finalization, vesting, and pool creation.
+  </Card>
+</CardGroup>
+
+## Get Started
+
+<CardGroup cols={3}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Set up your development environment and build StreamSwap contracts in minutes.
+  </Card>
+  
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Learn about StreamSwap's system design, contracts, and workspace structure.
+  </Card>
+  
+  <Card title="Stream Lifecycle" icon="timeline" href="/concepts/stream-lifecycle">
+    Understand the phases and state transitions of StreamSwap streams.
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+StreamSwap is ideal for:
+
+- **Token Launches**: Fair initial distribution for new projects
+- **Treasury Management**: DAOs raising funds over time with community participation
+- **Token Swaps**: Protocol migrations or token exchanges with transparent pricing
+- **Fundraising**: Project funding with built-in vesting and liquidity bootstrapping
+
+<Info>
+  StreamSwap is governed by a DAO that manages contract parameters, fee structures, and protocol upgrades, ensuring community-driven development.
+</Info>
+
+## Community & Resources
+
+- [GitHub Repository](https://github.com/StreamSwapProtocol/streamswap-contracts)
+- [StreamSwap Website](https://www.streamswap.io)
+- [Follow on X (Twitter)](https://twitter.com/StreamSwap_io)
+
+<Note>
+  StreamSwap contracts are licensed under Apache 2.0 and are currently deployed on Osmosis and Injective networks.
+</Note>

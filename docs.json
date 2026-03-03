@@ -1,122 +1,122 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "StreamSwap",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#3B82F6",
+    "light": "#60A5FA",
+    "dark": "#1E40AF"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/StreamSwapProtocol/streamswap-contracts"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/StreamSwapProtocol/streamswap-contracts",
+      "x": "https://x.com/StreamSwap_io"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "architecture"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/stream-lifecycle",
+              "concepts/tokenomics",
+              "concepts/pricing-mechanism",
+              "concepts/governance"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/creating-streams",
+              "guides/subscribing",
+              "guides/managing-positions",
+              "guides/finalizing-streams",
+              "guides/pool-creation",
+              "guides/vesting"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Development",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "development/building",
+              "development/testing",
+              "development/typescript-sdk",
+              "development/integration"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Overview",
             "pages": [
-              "api-reference/introduction"
+              "api/overview"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Controller Contract",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/controller/instantiate",
+              "api/controller/execute",
+              "api/controller/query"
+            ]
+          },
+          {
+            "group": "Stream Contract",
+            "pages": [
+              "api/stream/instantiate",
+              "api/stream/execute",
+              "api/stream/query"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/stream-state",
+              "api/types/position",
+              "api/types/pool-config"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Resources",
+        "groups": [
+          {
+            "group": "Deployment",
+            "pages": [
+              "resources/deployed-contracts",
+              "resources/security"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "resources/contributing",
+              "resources/faq"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

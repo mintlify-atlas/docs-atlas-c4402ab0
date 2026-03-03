@@ -1,0 +1,283 @@
+---
+title: Testing
+description: Comprehensive testing guide for StreamSwap smart contracts
+---
+
+## Running Tests
+
+Execute the entire test suite from the workspace root:
+
+```bash
+cargo test
+```
+
+This command runs:
+- Unit tests in contract modules
+- Integration tests in the `tests/` directory
+- Tests for shared packages and utilities
+
+## Test Structure
+
+StreamSwap uses a comprehensive testing structure:
+
+```
+tests/
+├── src/
+│   ├── tests/
+│   │   ├── controller_tests/
+│   │   │   ├── instantiate.rs
+│   │   │   ├── params_update.rs
+│   │   │   ├── controller_freeze.rs
+│   │   │   └── list_streams.rs
+│   │   ├── streamswap_tests/
+│   │   │   ├── subscribe.rs
+│   │   │   ├── withdraw.rs
+│   │   │   ├── exit_stream.rs
+│   │   │   ├── finalize_stream.rs
+│   │   │   ├── cancel_stream.rs
+│   │   │   ├── vesting.rs
+│   │   │   ├── pool.rs
+│   │   │   └── ...
+│   │   └── mod.rs
+│   ├── helpers/
+│   │   ├── suite.rs
+│   │   ├── utils.rs
+│   │   ├── mock_messages.rs
+│   │   └── stargate.rs
+│   └── lib.rs
+└── Cargo.toml
+```
+
+### Test Categories
+
+<Tabs>
+  <Tab title="Controller Tests">
+    Tests for the controller contract:
+    - **instantiate.rs**: Contract initialization
+    - **params_update.rs**: Parameter updates and governance
+    - **controller_freeze.rs**: Freeze/unfreeze functionality
+    - **list_streams.rs**: Stream enumeration and queries
+  </Tab>
+  <Tab title="Stream Tests">
+    Tests for stream contract functionality:
+    - **subscribe.rs**: Subscription mechanics
+    - **withdraw.rs**: Withdrawal operations
+    - **exit_stream.rs**: Stream exit logic
+    - **finalize_stream.rs**: Stream finalization
+    - **cancel_stream.rs**: Cancellation flows
+    - **vesting.rs**: Vesting integration
+    - **pool.rs**: Pool creation
+  </Tab>
+</Tabs>
+
+## Test Helpers and Utilities
+
+### Test Suite Builder
+
+The `SuiteBuilder` creates a configured test environment:
+
+```rust
+use crate::helpers::suite::SuiteBuilder;
+
+let Suite {
+    mut app,
+    test_accounts,
+    stream_swap_code_id,
+    stream_swap_controller_code_id,
+    vesting_code_id,
+} = SuiteBuilder::default().build();
+```
+
+### Test Environment
+
+The suite provides:
+- **`app`**: cw-multi-test App instance with mocked blockchain
+- **`test_accounts`**: Pre-configured test accounts with balances
+- **Code IDs**: Contract code IDs for instantiation
+
+### Mock Message Builders
+
+Utility builders for constructing test messages:
+
+```rust
+use crate::helpers::mock_messages::CreateStreamMsgBuilder;
+
+let create_stream_msg = CreateStreamMsgBuilder::new(
+    "Stream Swap tests",
+    test_accounts.creator_1.as_ref(),
+    coin(1_000_000, "out_denom"),
+    "in_denom",
+    bootstrapping_start_time,
+    start_time,
+    end_time,
+)
+.build();
+```
+
+## Example Test
+
+Here's a complete test example from `subscribe.rs`:
+
+```rust
+#[test]
+fn first_subscription() {
+    let Suite {
+        mut app,
+        test_accounts,
+        stream_swap_code_id,
+        stream_swap_controller_code_id,
+        vesting_code_id,
+    } = SuiteBuilder::default().build();
+    
+    let start_time = app.block_info().time.plus_seconds(100);
+    let end_time = app.block_info().time.plus_seconds(200);
+    let bootstrapping_start_time = app.block_info().time.plus_seconds(50);
+
+    // Instantiate controller
+    let msg = get_controller_inst_msg(
+        stream_swap_code_id, 
+        vesting_code_id, 
+        &test_accounts
+    );
+    let controller_address = app
+        .instantiate_contract(
+            stream_swap_controller_code_id,
+            test_accounts.admin.clone(),
+            &msg,
+            &[],
+            "Controller".to_string(),
+            None,
+        )
+        .unwrap();
+
+    // Create stream
+    let create_stream_msg = CreateStreamMsgBuilder::new(
+        "Stream Swap tests",
+        test_accounts.creator_1.as_ref(),
+        coin(1_000_000, "out_denom"),
+        "in_denom",
+        bootstrapping_start_time,
+        start_time,
+        end_time,
+    )
+    .build();
+
+    let res = app
+        .execute_contract(
+            test_accounts.creator_1.clone(),
+            controller_address.clone(),
+            &create_stream_msg,
+            &[coin(100, "fee_denom"), coin(1_000_000, "out_denom")],
+        )
+        .unwrap();
+    
+    let stream_address: String = get_contract_address_from_res(res);
+
+    // Test subscription
+    let subscribe_msg = StreamSwapExecuteMsg::Subscribe {};
+    app.set_block(BlockInfo {
+        height: 1_100,
+        time: start_time,
+        chain_id: "test".to_string(),
+    });
+
+    // Should fail with no funds
+    let res = app
+        .execute_contract(
+            test_accounts.subscriber_1.clone(),
+            Addr::unchecked(stream_address.clone()),
+            &subscribe_msg,
+            &[],
+        )
+        .unwrap_err();
+    
+    let err = res.source().unwrap();
+    let error = err.downcast_ref::<StreamSwapError>().unwrap();
+    assert_eq!(error, &StreamSwapError::Payment(PaymentError::NoFunds {}));
+}
+```
+
+## Test Dependencies
+
+Key testing dependencies from `Cargo.toml`:
+
+```toml
+[workspace.dependencies]
+cw-multi-test = { version = "0.20.1", features = ["cosmwasm_1_2"] }
+```
+
+### cw-multi-test Features
+
+<CardGroup cols={2}>
+  <Card title="Mock Blockchain" icon="cube">
+    Simulates a complete blockchain environment
+  </Card>
+  <Card title="Contract Testing" icon="vial">
+    Execute contracts without deploying to testnet
+  </Card>
+  <Card title="Fast Execution" icon="bolt">
+    Run hundreds of tests in seconds
+  </Card>
+  <Card title="Deterministic" icon="arrows-rotate">
+    Reproducible test results
+  </Card>
+</CardGroup>
+
+## Running Specific Tests
+
+### Test a Specific Module
+
+```bash
+# Test only controller
+cargo test controller_tests
+
+# Test only stream subscription
+cargo test subscribe
+```
+
+### Run Tests with Output
+
+```bash
+# Show println! output
+cargo test -- --nocapture
+
+# Show test names as they run
+cargo test -- --show-output
+```
+
+### Run Tests in Parallel
+
+```bash
+# Limit parallel test threads
+cargo test -- --test-threads=4
+
+# Run tests sequentially
+cargo test -- --test-threads=1
+```
+
+## Test Coverage
+
+StreamSwap maintains high test coverage across:
+
+- **Stream Lifecycle**: Waiting → Bootstrapping → Active → Ended → Finalized
+- **Subscription Mechanics**: Share calculation, position tracking
+- **Distribution Logic**: Time-based token distribution
+- **Exit Flows**: Normal exit and cancellation
+- **Edge Cases**: Rounding, thresholds, leftover handling
+- **Vesting Integration**: Creator and subscriber vesting
+- **Pool Creation**: Automated liquidity pool setup
+
+<Tip>
+  The test suite uses cw-multi-test for fast, deterministic contract testing without requiring a live blockchain.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building" icon="hammer" href="/development/building">
+    Learn how to build the contracts
+  </Card>
+  <Card title="TypeScript SDK" icon="code" href="/development/typescript-sdk">
+    Generate and use TypeScript bindings
+  </Card>
+</CardGroup>

@@ -1,0 +1,157 @@
+---
+title: Security
+description: Security considerations, audit status, and best practices for StreamSwap protocol
+---
+
+Security is a top priority for the StreamSwap protocol. This page outlines our security approach, audit status, and best practices for users and integrators.
+
+## Audit Status
+
+<Warning>
+  **Audit Pending**: The StreamSwap smart contracts are currently undergoing a comprehensive security audit. The audit report will be published on this page once completed.
+</Warning>
+
+While the contracts have undergone internal security reviews and extensive testing, an independent third-party audit is in progress. Users should be aware of this status when interacting with the protocol.
+
+### What We're Doing
+
+- Engaging with reputable blockchain security firms for comprehensive audits
+- Conducting internal code reviews and security assessments
+- Implementing extensive test coverage (see our [Codecov status](https://codecov.io/gh/StreamSwapProtocol/streamswap-contracts))
+- Following CosmWasm security best practices
+
+## Security Considerations
+
+### Smart Contract Risks
+
+<CardGroup cols={2}>
+  <Card title="Code Risks" icon="code">
+    Smart contracts are immutable once deployed. While StreamSwap contracts have been thoroughly tested, bugs or vulnerabilities could exist. Always review the code yourself or consult with security experts.
+  </Card>
+  
+  <Card title="Economic Risks" icon="chart-line">
+    Stream pricing is determined dynamically based on participation. Prices can be volatile, especially near stream end times. Understand the pricing mechanism before participating.
+  </Card>
+  
+  <Card title="Timing Risks" icon="clock">
+    Stream outcomes depend on timing and total participation. A stream may be cancelled if it doesn't meet minimum thresholds, or you may receive a different price than expected.
+  </Card>
+  
+  <Card title="Blockchain Risks" icon="network-wired">
+    Network congestion, high gas fees, or chain halts could prevent you from exiting a stream when desired. Plan your participation accordingly.
+  </Card>
+</CardGroup>
+
+### Best Practices for Users
+
+<AccordionGroup>
+  <Accordion title="Do Your Own Research">
+    Before participating in any stream:
+    - Review the stream parameters carefully (duration, threshold, tokens involved)
+    - Understand the project or token being distributed
+    - Check the stream creator's reputation and track record
+    - Review the current subscription amount and projected pricing
+  </Accordion>
+  
+  <Accordion title="Start Small">
+    - Consider starting with smaller amounts to familiarize yourself with the protocol
+    - Test the subscription, withdrawal, and exit flows
+    - Understand how pricing changes based on participation levels
+  </Accordion>
+  
+  <Accordion title="Monitor Your Position">
+    - Regularly check your stream position and current pricing
+    - Be aware of stream state transitions (Bootstrapping → Active → Ended)
+    - Set reminders for important milestones (stream end, withdrawal deadlines)
+  </Accordion>
+  
+  <Accordion title="Understand Exit Conditions">
+    - Know when you can withdraw (during Bootstrapping and Active states)
+    - Understand exit fees and how they're applied
+    - Be aware that you must explicitly call `exit` after a stream ends to claim your tokens
+  </Accordion>
+</AccordionGroup>
+
+### Best Practices for Integrators
+
+<Steps>
+  <Step title="Validate User Inputs">
+    Always validate and sanitize user inputs before submitting transactions. Check amounts, addresses, and parameters.
+  </Step>
+  
+  <Step title="Handle Errors Gracefully">
+    Implement proper error handling for all contract interactions. Streams can be in various states, and some operations may fail based on current state.
+  </Step>
+  
+  <Step title="Display Clear Information">
+    Show users all relevant information: current price, total subscribed, time remaining, fees, and stream state.
+  </Step>
+  
+  <Step title="Test Thoroughly">
+    Test your integration on testnet before deploying to production. Verify all user flows including edge cases.
+  </Step>
+  
+  <Step title="Keep Dependencies Updated">
+    Use the latest stable versions of the StreamSwap TypeScript bindings and stay informed about protocol updates.
+  </Step>
+</Steps>
+
+## Reporting Vulnerabilities
+
+If you discover a security vulnerability in the StreamSwap protocol, please report it responsibly.
+
+### How to Report
+
+<Note>
+  **Do not** disclose security vulnerabilities publicly through GitHub issues or social media.
+</Note>
+
+1. **Email**: Send details to security@streamswap.io (if available, otherwise contact the team through official channels)
+2. **Include**:
+   - Description of the vulnerability
+   - Steps to reproduce
+   - Potential impact assessment
+   - Suggested fixes (if any)
+
+3. **Response**: The team will acknowledge your report within 48 hours and provide updates on remediation progress
+
+### Responsible Disclosure
+
+We follow a responsible disclosure process:
+
+- Security issues are addressed as highest priority
+- Fixes are developed and tested privately
+- Patches are deployed before public disclosure
+- Credit is given to reporters (with their permission)
+
+## Security Features
+
+### Built-in Protections
+
+StreamSwap contracts include several security features:
+
+- **State Machine**: Strict state transitions prevent invalid operations
+- **Reentrancy Protection**: CosmWasm's architecture prevents reentrancy attacks
+- **Integer Overflow Protection**: Rust's type system prevents overflow issues
+- **Access Controls**: Only authorized addresses can perform privileged operations
+- **Threshold Requirements**: Streams can be cancelled if minimum requirements aren't met
+
+### DAO Governance
+
+The protocol is governed by a DAO, which:
+
+- Controls protocol parameters and fee structures
+- Can implement emergency interventions if needed
+- Manages protocol upgrades and improvements
+- Ensures transparent decision-making
+
+## Additional Resources
+
+- **Source Code**: [GitHub Repository](https://github.com/StreamSwapProtocol/streamswap-contracts)
+- **License**: Apache 2.0 (see [LICENSE](https://github.com/StreamSwapProtocol/streamswap-contracts/blob/main/LICENSE))
+- **Test Coverage**: [Codecov Report](https://codecov.io/gh/StreamSwapProtocol/streamswap-contracts)
+- **Community**: [Twitter/X](https://twitter.com/StreamSwap_io)
+
+<Warning>
+  Use StreamSwap at your own risk. The protocol is provided "as is" without warranties of any kind. Always conduct your own security review and understand the risks before interacting with smart contracts.
+</Warning>

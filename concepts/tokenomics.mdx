@@ -1,0 +1,350 @@
+---
+title: Tokenomics & Distribution
+description: Understanding how tokens are distributed and calculated in StreamSwap
+---
+
+StreamSwap uses a sophisticated share-based distribution mechanism that ensures fair and continuous token allocation. The system tracks positions through an indexed distribution model that efficiently calculates each participant's entitlements.
+
+## Distribution Index (dist_index)
+
+The `dist_index` is the core mechanism for tracking token distribution across all participants.
+
+### How It Works
+
+```rust packages/types/src/stream/stream.rs
+/// Distribution index, used to calculate the amount of out assets to be distributed
+pub dist_index: Decimal256,
+```
+
+The distribution index increases continuously during the Active state, representing the cumulative amount of out tokens distributed per share:
+
+```rust contracts/stream/src/stream.rs
+if !new_distribution_balance.is_zero() {
+    stream.out_remaining -= new_distribution_balance;
+    stream.dist_index += Decimal256::from_ratio(new_distribution_balance, stream.shares);
+    stream.current_streamed_price = Decimal256::from_ratio(spent_in, new_distribution_balance);
+}
+```
+
+**Formula:**
+```
+dist_index += new_distribution_balance / total_shares
+```
+
+This index-based approach means:
+- No need to iterate through all positions
+- O(1) complexity for updates
+- Positions can sync independently
+- Gas efficient for any number of participants
+
+## Share-Based Allocation
+
+Shares represent each participant's proportional stake in the stream.
+
+### Computing Shares
+
+When a user subscribes, their shares are calculated:
+
+```rust contracts/stream/src/stream.rs
+pub fn compute_shares_amount(stream: &StreamState, amount_in: Uint256, round_up: bool) -> Uint256 {
+    if stream.shares.is_zero() || amount_in.is_zero() {
+        return amount_in;
+    }
+    let shares = stream.shares.mul(amount_in);
+    if round_up {
+        (shares + stream.in_supply - Uint256::one()) / stream.in_supply
+    } else {
+        shares / stream.in_supply
+    }
+}
+```
+
+**Key Points:**
+- First subscriber: shares = amount_in (1:1 ratio)
+- Subsequent subscribers: shares maintain proportional value
+- Round up for withdrawals, round down for subscriptions
+- Prevents share dilution attacks
+
+### Share Economics Example
+
+```
+Initial State:
+- total_shares = 0
+- in_supply = 0
+
+User A subscribes 1000 tokens:
+- A_shares = 1000 (first user, 1:1)
+- total_shares = 1000
+- in_supply = 1000
+
+User B subscribes 500 tokens:
+- B_shares = (1000 * 500) / 1000 = 500
+- total_shares = 1500
+- in_supply = 1500
+
+Distribution occurs (100 out tokens released):
+- dist_index += 100 / 1500 = 0.0666...
+- User A entitled: 1000 * 0.0666... = 66.66 tokens
+- User B entitled: 500 * 0.0666... = 33.33 tokens
+```
+
+## Position Tracking
+
+Each participant has a position that tracks their individual state:
+
+```rust packages/types/src/stream/stream.rs
+pub struct Position {
+    pub owner: Addr,
+    pub in_balance: Uint256,      // Remaining unspent in tokens
+    pub shares: Uint256,            // Position's share count
+    pub index: Decimal256,          // Last synced dist_index
+    pub purchased: Uint256,         // Total out tokens purchased
+    pub spent: Uint256,             // Total in tokens spent
+    pub last_updated: Timestamp,
+    pub pending_purchase: Decimal256, // Sub-unit precision
+    pub exit_date: Timestamp,
+}
+```
+
+### Syncing Positions
+
+Positions sync to the global distribution index to calculate purchases:
+
+```rust contracts/stream/src/contract.rs
+pub fn sync_position(
+    stream_dist_index: Decimal256,
+    stream_shares: Uint256,
+    stream_last_updated_time: Timestamp,
+    stream_in_supply: Uint256,
+    position: &mut Position,
+) -> Result<(Uint256, Uint256), ContractError> {
+    // index difference represents the amount of distribution 
+    // that has been received since last update
+    let index_diff = stream_dist_index.checked_sub(position.index)?;
+
+    let mut spent = Uint256::zero();
+    let mut uint256_purchased = Uint256::zero();
+
+    if !stream_shares.is_zero() {
+        // purchased is index_diff * position.shares
+        let purchased = Decimal256::from_ratio(position.shares, Uint256::one())
+            .checked_mul(index_diff)?;
+
+        // calculates the remaining user balance using position.shares
+        let in_remaining = stream_in_supply
+            .checked_mul(position.shares)?
+            .checked_div(stream_shares)?;
+
+        // calculates the amount of spent tokens
+        spent = position.in_balance.checked_sub(in_remaining)?;
+        position.spent = position.spent.checked_add(spent)?;
+        position.in_balance = in_remaining;
+
+        uint256_purchased = purchased * Uint256::one();
+        position.purchased = position.purchased.checked_add(uint256_purchased)?;
+    }
+
+    position.index = stream_dist_index;
+    position.last_updated = stream_last_updated_time;
+
+    Ok((uint256_purchased, spent))
+}
+```
+
+**Calculation Flow:**
+1. Calculate index difference since last sync
+2. Multiply by position shares to get new purchases
+3. Calculate proportional spend based on share ratio
+4. Update position balances
+5. Update position index to current
+
+## In/Out Asset Flows
+
+### Stream State Variables
+
+```rust packages/types/src/stream/stream.rs
+pub struct StreamState {
+    pub in_denom: String,           // Denomination of in asset
+    pub in_supply: Uint256,         // Current unspent in tokens in stream
+    pub spent_in: Uint256,          // Total in tokens spent
+    pub out_asset: Coin,            // Out token denomination and initial amount
+    pub out_remaining: Uint256,     // Remaining out tokens to distribute
+    pub shares: Uint256,            // Total shares across all positions
+    // ... other fields
+}
+```
+
+### Asset Flow Invariants
+
+At any point in time:
+
+```
+Total In Assets:
+  spent_in + in_supply = total deposited in tokens
+
+Total Out Assets:
+  distributed + out_remaining = initial out_asset amount
+
+Distributed Amount:
+  distributed = initial_out_amount - out_remaining
+```
+
+### Subscribe Operation
+
+When a user subscribes:
+
+```rust contracts/stream/src/contract.rs
+// New tokens should not participate in previous distribution
+sync_stream(&mut stream_state, env.block.time);
+
+// Calculate shares for new amount
+new_shares = compute_shares_amount(&stream_state, uint256_in_amount, false);
+
+// Create or update position
+position.in_balance += uint256_in_amount;
+position.shares += new_shares;
+
+// Update stream totals
+stream_state.in_supply += uint256_in_amount;
+stream_state.shares += new_shares;
+```
+
+**Key Protection:** New subscriptions sync the stream first to prevent dilution from past distribution.
+
+### Withdraw Operation
+
+When a user withdraws during Bootstrapping or Active:
+
+```rust contracts/stream/src/contract.rs
+// Sync to calculate current state
+sync_stream(&mut stream, env.block.time);
+sync_position(/* ... */);
+
+// Calculate shares to remove
+let shares_amount = if withdraw_amount == position.in_balance {
+    position.shares  // Full withdrawal - take all shares
+} else {
+    compute_shares_amount(&stream, withdraw_amount, true)  // Partial - round up
+};
+
+// Update stream and position
+stream.in_supply -= withdraw_amount;
+stream.shares -= shares_amount;
+position.in_balance -= withdraw_amount;
+position.shares -= shares_amount;
+```
+
+**Rounding:** Withdrawals round up shares to prevent dust attacks.
+
+## Time-Based Distribution
+
+Distribution occurs linearly over the stream duration:
+
+```rust contracts/stream/src/stream.rs
+fn calculate_diff(
+    start_time: Timestamp,
+    end_time: Timestamp,
+    mut last_updated: Timestamp,
+    now: Timestamp,
+) -> Decimal {
+    // Clamp to active period
+    if last_updated < start_time {
+        last_updated = start_time;
+    }
+    let now = if now > end_time { end_time } else { now };
+
+    let numerator = now.nanos().saturating_sub(last_updated.nanos());
+    let denominator = end_time.nanos().saturating_sub(last_updated.nanos());
+
+    if denominator == 0 || numerator == 0 {
+        Decimal::zero()
+    } else {
+        Decimal::from_ratio(numerator, denominator)
+    }
+}
+```
+
+**Distribution Formula:**
+```
+time_fraction = (now - last_updated) / (end_time - last_updated)
+new_distribution = out_remaining * time_fraction
+spent_in = in_supply * time_fraction
+```
+
+This ensures:
+- Linear vesting of out tokens
+- Proportional spending of in tokens
+- Complete distribution by end_time
+- Fair participation regardless of entry time
+
+## Spending Calculations
+
+### Global Spending
+
+Each sync calculates how much of the in_supply is "spent":
+
+```rust contracts/stream/src/stream.rs
+let spent_in = stream
+    .in_supply
+    .multiply_ratio(diff.numerator(), diff.denominator());
+
+stream.spent_in += spent_in;
+stream.in_supply -= spent_in;
+```
+
+### Position Spending
+
+Position spending is calculated proportionally:
+
+```rust contracts/stream/src/contract.rs
+// Remaining balance based on share proportion
+let in_remaining = stream_in_supply
+    .checked_mul(position.shares)?
+    .checked_div(stream_shares)?;
+
+// Spent is the difference
+spent = position.in_balance.checked_sub(in_remaining)?;
+position.spent += spent;
+position.in_balance = in_remaining;
+```
+
+**Formula:**
+```
+position.in_remaining = stream.in_supply * (position.shares / stream.shares)
+position.spent_delta = position.in_balance - position.in_remaining
+```
+
+## Precision Handling
+
+The system uses `Decimal256` for sub-unit precision:
+
+```rust contracts/stream/src/contract.rs
+let purchased = Decimal256::from_ratio(position.shares, Uint256::one())
+    .checked_mul(index_diff)?
+    .checked_add(position.pending_purchase)?;
+
+let decimals = get_decimals(purchased)?;
+position.pending_purchase = decimals;
+
+uint256_purchased = purchased * Uint256::one();  // Floor to integer
+```
+
+**Pending Purchase:** Fractional amounts are saved and added to the next calculation, preventing precision loss over time.
+
+## Economic Security
+
+### Protection Mechanisms
+
+1. **No retroactive participation**: Subscriptions sync before adding shares
+2. **Rounding protection**: Withdrawals round up to prevent dust attacks
+3. **Atomic operations**: All calculations in single transaction
+4. **Overflow checks**: All math operations are checked
+5. **Share proportionality**: Maintained through careful calculation
+
+### Fair Distribution Properties
+
+- **Time-weighted**: Earlier participants don't get unfair advantage
+- **Proportional**: Share-based ensures fair allocation
+- **Continuous**: No discrete epochs or windows
+- **Gas-efficient**: O(1) operations regardless of participant count
+- **Precise**: Sub-unit precision tracking prevents losses

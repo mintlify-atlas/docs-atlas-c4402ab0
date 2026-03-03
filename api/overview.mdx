@@ -1,0 +1,102 @@
+---
+title: API Overview
+description: StreamSwap smart contract API reference
+icon: 'book-open'
+---
+
+## Contract Architecture
+
+StreamSwap consists of two primary smart contracts that work together to enable token streaming:
+
+### Controller Contract
+
+The **Controller Contract** is the main entry point for creating and managing streams. It handles:
+
+- Stream creation and instantiation
+- Global protocol parameters
+- Fee collection
+- Stream registry
+- Protocol-level access control
+
+### Stream Contract
+
+Each **Stream Contract** represents an individual token stream. It manages:
+
+- Subscriber positions and shares
+- Token distribution logic
+- Stream lifecycle (Waiting → Bootstrapping → Active → Ended → Finalized)
+- Exit and withdrawal operations
+- Post-stream actions (vesting, pool creation)
+
+## Message Types
+
+Both contracts follow the standard CosmWasm message pattern:
+
+### InstantiateMsg
+
+Used to initialize a new contract instance. The Controller is instantiated once, while Stream contracts are instantiated for each new stream.
+
+### ExecuteMsg
+
+Defines state-changing operations that require authorization and can modify contract state.
+
+### QueryMsg
+
+Defines read-only operations for retrieving contract state without modifying it.
+
+## Contract Addresses
+
+### Mainnet (Osmosis)
+
+<CardGroup cols={2}>
+  <Card title="Controller Contract" icon="gears">
+    **Code ID:** TBD
+    
+    **Address:** `osmo1...`
+  </Card>
+  
+  <Card title="Stream Contract" icon="water">
+    **Code ID:** TBD
+    
+    **Template:** Instantiated per stream
+  </Card>
+</CardGroup>
+
+## Key Concepts
+
+### Stream Lifecycle
+
+1. **Waiting** - Stream is created but not yet accepting subscriptions
+2. **Bootstrapping** - Accepting subscriptions, no token streaming yet
+3. **Active** - Tokens are being streamed to subscribers
+4. **Ended** - Stream period completed, awaiting finalization
+5. **Finalized** - Stream closed, funds distributed
+6. **Cancelled** - Stream cancelled, full refunds issued
+
+### Positions & Shares
+
+When users subscribe to a stream, they receive **shares** proportional to their contribution. These shares determine their portion of the streamed tokens.
+
+### Distribution Index
+
+The `dist_index` tracks how many output tokens each share is entitled to. This enables efficient pro-rata distribution without iterating over all positions.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Controller API" icon="gears" href="/api/controller/instantiate">
+    Learn how to instantiate and interact with the Controller contract
+  </Card>
+  
+  <Card title="Stream API" icon="water" href="/api/stream/instantiate">
+    Explore Stream contract operations and queries
+  </Card>
+  
+  <Card title="Type Reference" icon="code" href="/api/types/stream-state">
+    View detailed type definitions and structures
+  </Card>
+  
+  <Card title="Integration Guide" icon="plug" href="/development/integration">
+    Start building with StreamSwap
+  </Card>
+</CardGroup>

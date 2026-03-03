@@ -1,0 +1,422 @@
+---
+title: 'Managing Positions'
+description: 'Track and synchronize subscriber positions in StreamSwap streams'
+---
+
+Positions track each subscriber's state in a stream, including their shares, spending, and purchased tokens. This guide covers position management, synchronization, and querying.
+
+## Position Structure
+
+Each subscriber has a position with the following data:
+
+```rust
+pub struct Position {
+    pub owner: Addr,                  // Position owner address
+    pub in_balance: Uint256,          // Remaining unspent tokens
+    pub shares: Uint256,              // Share amount in the stream
+    pub index: Decimal256,            // Distribution index at last sync
+    pub last_updated: Timestamp,      // Time of last update
+    pub purchased: Uint256,           // Total out_tokens purchased
+    pub pending_purchase: Decimal256, // Fractional purchases pending
+    pub spent: Uint256,               // Total in_tokens spent
+    pub exit_date: Timestamp,         // Exit timestamp (0 if active)
+}
+```
+
+### Key Fields Explained
+
+#### in_balance
+The amount of `in_denom` tokens remaining in your position. This decreases over time as tokens are "spent" to purchase `out_asset` tokens.
+
+#### shares
+Your proportional claim on the token distribution. More shares = more tokens purchased per distribution event.
+
+#### index
+The distribution index when your position was last synchronized. Used to calculate how much distribution has occurred since your last update.
+
+#### purchased
+Total `out_asset` tokens you've purchased through the stream. This is your claimable amount at stream end.
+
+#### spent
+Total `in_denom` tokens spent from your `in_balance` to purchase tokens.
+
+#### pending_purchase
+Fractional token amounts that couldn't be assigned due to rounding. Carried forward to next distribution.
+
+## Querying Positions
+
+### Query Your Position
+
+```rust
+use streamswap_types::stream::{QueryMsg, PositionResponse};
+
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Position {
+        owner: subscriber_address.to_string()
+    }
+)?;
+
+println!("Shares: {}", position.shares);
+println!("Balance: {}", position.in_balance);
+println!("Purchased: {}", position.purchased);
+println!("Spent: {}", position.spent);
+println!("Index: {}", position.index);
+println!("Last Updated: {}", position.last_updated);
+```
+
+### List All Positions
+
+Query multiple positions with pagination:
+
+```rust
+let positions: PositionsResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::ListPositions {
+        start_after: None,
+        limit: Some(30)
+    }
+)?;
+
+for position in positions.positions {
+    println!("Owner: {}", position.owner);
+    println!("Shares: {}", position.shares);
+    println!("Purchased: {}", position.purchased);
+}
+```
+
+<Note>
+The maximum limit per query is 30 positions. Use `start_after` for pagination.
+</Note>
+
+## Position Synchronization
+
+Positions must be synchronized to update spending and purchases based on the current stream state.
+
+### SyncPosition Message
+
+Manually sync your position:
+
+```rust
+use streamswap_types::stream::ExecuteMsg;
+
+let sync_msg = ExecuteMsg::SyncPosition {};
+
+let res = app.execute_contract(
+    subscriber_address,
+    stream_address,
+    &sync_msg,
+    &[] // No funds required
+)?;
+```
+
+<Steps>
+  <Step title="Stream synchronized">
+    The stream state is updated to the current block time, calculating new distribution.
+  </Step>
+  
+  <Step title="Index difference calculated">
+    The difference between the stream's current `dist_index` and your position's `index` is computed.
+  </Step>
+  
+  <Step title="Purchases calculated">
+    New purchased tokens = (index_diff × your_shares)
+  </Step>
+  
+  <Step title="Spending calculated">
+    Your new `in_balance` is computed based on remaining shares proportion.
+    Spent = old_balance - new_balance
+  </Step>
+  
+  <Step title="Position updated">
+    All fields are updated and saved to state.
+  </Step>
+</Steps>
+
+### Automatic Synchronization
+
+Positions are automatically synchronized when you:
+- Subscribe again (add more tokens)
+- Withdraw tokens
+- Exit the stream
+
+You don't need to manually sync before these operations.
+
+## Tracking Purchased Tokens
+
+Your purchased tokens are calculated using the distribution index:
+
+```rust
+// Index difference since last sync
+let index_diff = stream.dist_index - position.index;
+
+// Purchased tokens (including pending fractional amounts)
+let purchased_decimal = position.shares * index_diff + position.pending_purchase;
+
+// Integer purchased amount (fractional part saved for next time)
+let purchased = purchased_decimal.floor();
+let pending = purchased_decimal - purchased;
+
+position.purchased += purchased;
+position.pending_purchase = pending;
+```
+
+### Example Calculation
+
+```rust
+// Initial state
+position.shares = 1000
+position.index = 100
+position.pending_purchase = 0.5
+
+// After 10 seconds, stream.dist_index = 110
+index_diff = 110 - 100 = 10
+
+// Purchased calculation
+purchased_decimal = (1000 * 10) + 0.5 = 10000.5
+purchased = 10000 (integer part)
+pending_purchase = 0.5 (carried forward)
+
+// Updated position
+position.purchased += 10000  // Now 10000 total
+position.pending_purchase = 0.5
+position.index = 110
+```
+
+<Note>
+Pending fractional amounts ensure no value is lost to rounding over time.
+</Note>
+
+## Tracking Spending
+
+Your `in_balance` decreases proportionally as the stream progresses:
+
+```rust
+// Calculate your share of remaining supply
+let in_remaining = (stream.in_supply * position.shares) / stream.shares;
+
+// Spending since last sync
+let spent = position.in_balance - in_remaining;
+
+position.spent += spent;
+position.in_balance = in_remaining;
+```
+
+### Example Calculation
+
+```rust
+// Initial state
+position.in_balance = 1000
+position.shares = 1000
+stream.shares = 2000
+stream.in_supply = 1800 // 200 spent globally
+
+// Calculate your portion
+in_remaining = (1800 * 1000) / 2000 = 900
+spent = 1000 - 900 = 100
+
+// Updated position
+position.spent += 100  // Now 100 total
+position.in_balance = 900
+```
+
+## Position States
+
+### Active Position
+
+A position is active when:
+- `exit_date == Timestamp::from_seconds(0)`
+- Can subscribe more
+- Can withdraw
+- Can sync
+
+### Exited Position
+
+After calling `ExitStream`:
+- `exit_date` is set to current block time
+- Cannot subscribe more
+- Cannot withdraw
+- Cannot exit again
+- Position remains queryable for historical data
+
+## Real-World Usage Example
+
+Complete position management workflow:
+
+```rust
+use cosmwasm_std::{coin, Timestamp};
+use streamswap_types::stream::{ExecuteMsg, QueryMsg, PositionResponse, StreamResponse};
+
+// 1. Subscribe to stream
+let subscribe_msg = ExecuteMsg::Subscribe {};
+app.execute_contract(
+    subscriber.clone(),
+    stream_address.clone(),
+    &subscribe_msg,
+    &[coin(1000, "in_denom")]
+)?;
+
+// 2. Query initial position
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Position { owner: subscriber.to_string() }
+)?;
+
+println!("Initial shares: {}", position.shares);
+println!("Initial balance: {}", position.in_balance);
+assert_eq!(position.purchased, Uint256::zero());
+assert_eq!(position.spent, Uint256::zero());
+
+// 3. Wait for some time to pass
+app.set_block_time(current_time.plus_seconds(3600));
+
+// 4. Sync position to update purchases
+let sync_msg = ExecuteMsg::SyncPosition {};
+app.execute_contract(
+    subscriber.clone(),
+    stream_address.clone(),
+    &sync_msg,
+    &[]
+)?;
+
+// 5. Query updated position
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Position { owner: subscriber.to_string() }
+)?;
+
+println!("Purchased: {}", position.purchased);
+println!("Spent: {}", position.spent);
+println!("Remaining balance: {}", position.in_balance);
+
+// 6. Calculate metrics
+let average_price = if !position.purchased.is_zero() {
+    position.spent / position.purchased
+} else {
+    Uint256::zero()
+};
+
+println!("Average price: {}", average_price);
+
+let remaining_percent = if position.in_balance > Uint256::zero() {
+    (position.in_balance * 100) / (position.in_balance + position.spent)
+} else {
+    0
+};
+
+println!("Remaining: {}%", remaining_percent);
+
+// 7. Check if ready to exit
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Stream {}
+)?;
+
+if stream.status == Status::Ended || stream.status == Status::Finalized {
+    println!("Stream ended - ready to exit and claim tokens");
+}
+```
+
+## Position Analytics
+
+### Calculate Average Purchase Price
+
+```rust
+let avg_price = if !position.purchased.is_zero() {
+    Decimal256::from_ratio(position.spent, position.purchased)
+} else {
+    Decimal256::zero()
+};
+```
+
+### Calculate Spending Rate
+
+```rust
+let time_elapsed = current_time.seconds() - position.last_updated.seconds();
+let spending_rate = if time_elapsed > 0 {
+    Decimal256::from_ratio(position.spent, time_elapsed)
+} else {
+    Decimal256::zero()
+};
+```
+
+### Estimate Future Purchases
+
+```rust
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Stream {}
+)?;
+
+// Estimate purchases if position held until stream end
+let time_remaining = stream.end_time.seconds() - current_time.seconds();
+let total_duration = stream.end_time.seconds() - stream.start_time.seconds();
+
+let estimated_final_purchased = if total_duration > 0 {
+    let progress = Decimal256::from_ratio(time_remaining, total_duration);
+    let remaining_out = stream.out_remaining * position.shares / stream.shares;
+    position.purchased + remaining_out
+} else {
+    position.purchased
+};
+```
+
+## Best Practices
+
+### When to Sync
+
+<Tabs>
+  <Tab title="Recommended">
+    - Before querying position for UI display
+    - Before making subscription/withdrawal decisions
+    - Periodically during long-running streams
+  </Tab>
+  
+  <Tab title="Not Necessary">
+    - Right before subscribing (auto-synced)
+    - Right before withdrawing (auto-synced)
+    - Right before exiting (auto-synced)
+    - Multiple times in same block
+  </Tab>
+</Tabs>
+
+### Gas Optimization
+
+```rust
+// Instead of syncing multiple positions separately
+for subscriber in subscribers {
+    sync_position(subscriber); // Expensive
+}
+
+// Query positions directly (they sync on-demand)
+let positions: PositionsResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::ListPositions { start_after: None, limit: Some(30) }
+)?;
+```
+
+<Warning>
+Querying positions does NOT automatically sync them. The returned data reflects their last synced state.
+</Warning>
+
+## Error Handling
+
+Common position-related errors:
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Position not found | Address hasn't subscribed | Subscribe first |
+| `OperationNotAllowed` | Stream in wrong state | Check stream status |
+| `SubscriberAlreadyExited` | Position already exited | Cannot interact after exit |
+| `Unauthorized` | Wrong sender | Use position owner address |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Subscribing" icon="ticket" href="/guides/subscribing">
+    Learn how to create and manage subscriptions
+  </Card>
+  <Card title="Finalizing Streams" icon="flag-checkered" href="/guides/finalizing-streams">
+    Exit streams and claim purchased tokens
+  </Card>
+</CardGroup>

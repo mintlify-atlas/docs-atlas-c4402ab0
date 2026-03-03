@@ -1,0 +1,586 @@
+---
+title: 'Finalizing Streams'
+description: 'Complete StreamSwap streams and distribute funds to creators and subscribers'
+---
+
+Stream finalization is the process of completing a stream after it ends, distributing revenue to creators, and allowing subscribers to claim their purchased tokens.
+
+## Overview
+
+Finalization workflow:
+
+<Steps>
+  <Step title="Stream ends">
+    The stream reaches its `end_time` and enters the Ended state.
+  </Step>
+  
+  <Step title="Stream admin finalizes">
+    The stream admin calls `FinalizeStream` to process final accounting.
+  </Step>
+  
+  <Step title="Threshold checked">
+    System checks if minimum threshold was met (if configured).
+  </Step>
+  
+  <Step title="Funds distributed">
+    Creator revenue, exit fees, and optional pool/vesting are processed.
+  </Step>
+  
+  <Step title="Subscribers exit">
+    Subscribers call `ExitStream` to claim their purchased tokens.
+  </Step>
+</Steps>
+
+## FinalizeStream Message
+
+Only the stream admin can finalize a stream:
+
+```rust
+use streamswap_types::stream::ExecuteMsg;
+use streamswap_types::controller::CreatePool;
+use cosmwasm_std::Binary;
+
+let finalize_msg = ExecuteMsg::FinalizeStream {
+    new_treasury: None,                    // Optional: override treasury address
+    create_pool: None,                     // Optional: pool creation params
+    salt: None,                            // Required if creator_vesting enabled
+};
+
+let res = app.execute_contract(
+    stream_admin,
+    stream_address,
+    &finalize_msg,
+    &[] // No funds needed
+)?;
+```
+
+### Parameters
+
+#### new_treasury
+Optionally override the treasury address to send creator revenue to a different address:
+
+```rust
+new_treasury: Some("osmo1newtreasuryaddress...".to_string())
+```
+
+#### create_pool
+If the stream was created with `pool_config`, provide pool creation parameters:
+
+```rust
+create_pool: Some(CreatePool::ConcentratedLiquidity {
+    lower_tick: 500,
+    upper_tick: 100000,
+    tick_spacing: 100,
+    spread_factor: "0.01".to_string(),
+})
+```
+
+<Warning>
+If `pool_config` was set during creation, you **must** provide `create_pool` parameters. The contract will error if they don't match.
+</Warning>
+
+#### salt
+Required if `creator_vesting` was configured. Used for deterministic vesting contract address generation:
+
+```rust
+salt: Some(Binary::from_base64("cmFuZG9tc2FsdA==").unwrap())
+```
+
+## When Finalization is Available
+
+Finalization can only occur when:
+
+```rust
+// Stream must be in Ended state
+stream.status == Status::Ended
+
+// AND caller must be stream_admin
+info.sender == stream_info.stream_admin
+```
+
+A stream enters `Ended` state when `current_time >= end_time`.
+
+<Note>
+Anyone can call `SyncStream` to update the status, but only the stream admin can finalize.
+</Note>
+
+## Threshold-Based Finalization
+
+Streams behave differently based on whether the threshold was met.
+
+### Threshold Reached
+
+When `stream.spent_in >= threshold`:
+
+<Steps>
+  <Step title="Calculate exit fee">
+    Exit fee = spent_in × exit_fee_percent
+  </Step>
+  
+  <Step title="Calculate creator revenue">
+    Revenue = spent_in - exit_fee - pool_allocation
+  </Step>
+  
+  <Step title="Refund unsold tokens">
+    If out_remaining > 0, refund to treasury
+  </Step>
+  
+  <Step title="Create pool (if configured)">
+    Create liquidity pool with allocated tokens
+  </Step>
+  
+  <Step title="Process vesting (if configured)">
+    Instantiate vesting contracts for creator
+  </Step>
+  
+  <Step title="Send revenue">
+    Transfer revenue to treasury (or vesting contract)
+  </Step>
+  
+  <Step title="Send exit fee">
+    Transfer fee to protocol fee collector
+  </Step>
+  
+  <Step title="Update status">
+    Set status to Finalized(ThresholdReached)
+  </Step>
+</Steps>
+
+**Example:**
+```rust
+// Stream with 1,000,000 out_asset, 200,000 spent_in
+// Exit fee: 1%, Pool allocation: 20% of out_asset
+
+let exit_fee = 200_000 * 0.01 = 2_000
+let pool_out_amount = 1_000_000 * 0.20 = 200_000
+let pool_in_amount = (200_000 / 1_000_000) * (200_000 - 2_000) = 39_600
+let creator_revenue = 200_000 - 2_000 - 39_600 = 158_400
+
+// Transfers:
+// - Treasury receives 158,400 in_denom
+// - Fee collector receives 2,000 in_denom
+// - Pool receives 200,000 out_denom + 39,600 in_denom
+```
+
+### Threshold Not Reached
+
+When threshold is set and `stream.spent_in < threshold`:
+
+<Steps>
+  <Step title="Refund out_asset">
+    Return all out_asset tokens to treasury
+  </Step>
+  
+  <Step title="Refund pool allocation">
+    Return pool creation fee and out_amount_clp to treasury
+  </Step>
+  
+  <Step title="Update status">
+    Set status to Finalized(ThresholdNotReached)
+  </Step>
+</Steps>
+
+**Subscribers get full refunds:**
+- When they call `ExitStream`, they receive `position.spent + position.in_balance`
+- No exit fees charged
+- No tokens purchased (full refund)
+
+```rust
+// Threshold not met - creator refunds
+let refunds = vec![
+    coin(1_000_000, "out_denom"),           // Original out_asset
+    coin(200_000, "out_denom"),             // Pool out_amount_clp
+    coin(1_000_000, "uosmo"),               // Pool creation fee
+];
+
+// All refunds go to treasury
+```
+
+## Exit Fee Collection
+
+The protocol collects an exit fee from subscribers:
+
+```rust
+let exit_fee_percent: Decimal256 = controller_params.exit_fee_percent;
+
+// Fee calculated on spent amount
+let exit_fee = (stream.spent_in * exit_fee_percent).floor();
+
+// Creator revenue after fee
+let creator_revenue = stream.spent_in - exit_fee;
+```
+
+<Note>
+Exit fees are only collected when threshold is reached. Threshold failures result in full refunds with no fees.
+</Note>
+
+## Treasury Withdrawal
+
+Creator revenue is sent to the treasury address:
+
+```rust
+// Default: use original treasury
+let treasury = stream_info.treasury;
+
+// Or use override if provided
+let treasury = new_treasury.unwrap_or(stream_info.treasury);
+
+// Transfer revenue
+let send_msg = BankMsg::Send {
+    to_address: treasury.to_string(),
+    amount: vec![coin(creator_revenue, in_denom)],
+};
+```
+
+### With Creator Vesting
+
+If creator vesting is configured, revenue goes to a vesting contract instead:
+
+```rust
+// Vesting contract instantiated
+let vesting_addr = instantiate_vesting(
+    treasury,
+    creator_revenue,
+    in_denom,
+    vesting_config
+);
+
+// Revenue sent to vesting contract
+// Treasury can claim from vesting contract over time
+```
+
+Query creator vesting contract:
+```rust
+let vesting_addr: String = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::CreatorVesting {}
+)?;
+```
+
+## Post-Stream Actions
+
+### Pool Creation
+
+If `pool_config` was set during creation:
+
+```rust
+// 1. Calculate pool allocations
+let pool_out_amount = 200_000; // From pool_config
+let pool_in_amount = (pool_out_amount / out_supply) * creator_revenue;
+
+// 2. Create concentrated liquidity pool
+let create_pool_msg = MsgCreateConcentratedPool {
+    sender: stream_address,
+    denom0: out_denom,
+    denom1: in_denom,
+    tick_spacing: 100,
+    spread_factor: "0.01",
+};
+
+// 3. Create initial position
+let create_position_msg = MsgCreatePosition {
+    pool_id: next_pool_id,
+    sender: stream_address,
+    lower_tick: 500,
+    upper_tick: 100000,
+    tokens_provided: vec![
+        coin(pool_out_amount, out_denom),
+        coin(pool_in_amount, in_denom),
+    ],
+    ...
+};
+
+// 4. Reduce creator revenue
+creator_revenue -= pool_in_amount;
+```
+
+See the [Pool Creation guide](/guides/pool-creation) for details.
+
+### Vesting Contracts
+
+If vesting is configured, contracts are instantiated automatically:
+
+```rust
+// Creator vesting (for creator revenue)
+if let Some(creator_vesting) = post_stream_actions.creator_vesting {
+    let vesting_addr = instantiate_vesting(
+        treasury,
+        creator_revenue,
+        in_denom,
+        creator_vesting
+    );
+    // Revenue goes to vesting contract
+}
+
+// Subscriber vesting (handled during ExitStream)
+if let Some(subscriber_vesting) = post_stream_actions.subscriber_vesting {
+    // Each subscriber gets their own vesting contract on exit
+}
+```
+
+See the [Vesting guide](/guides/vesting) for details.
+
+## Subscriber Exit
+
+After finalization, subscribers must exit to claim their tokens.
+
+### ExitStream Message
+
+```rust
+let exit_msg = ExecuteMsg::ExitStream {
+    salt: None, // Required if subscriber_vesting enabled
+};
+
+let res = app.execute_contract(
+    subscriber,
+    stream_address,
+    &exit_msg,
+    &[]
+)?;
+```
+
+### Normal Exit (Threshold Reached)
+
+When threshold was met:
+
+<Steps>
+  <Step title="Sync position">
+    Update purchased amount to latest distribution
+  </Step>
+  
+  <Step title="Calculate exit fee">
+    Fee = position.spent × exit_fee_percent
+  </Step>
+  
+  <Step title="Send purchased tokens">
+    Transfer position.purchased amount in out_denom
+    (or to vesting contract if configured)
+  </Step>
+  
+  <Step title="Refund unspent tokens">
+    Transfer position.in_balance in in_denom
+  </Step>
+  
+  <Step title="Update position">
+    Set exit_date and remove shares from stream
+  </Step>
+</Steps>
+
+**Example:**
+```rust
+// Position state
+position.purchased = 10_000
+position.spent = 200
+position.in_balance = 50
+exit_fee_percent = 0.01
+
+// Calculate fee
+let exit_fee = 200 * 0.01 = 2
+
+// Transfers:
+// - Subscriber receives 10,000 out_denom (purchased)
+// - Subscriber receives 50 in_denom (unspent)
+// - Exit fee (2 in_denom) already deducted from spent
+```
+
+### Full Refund Exit (Threshold Not Reached)
+
+When threshold was not met:
+
+<Steps>
+  <Step title="Calculate total balance">
+    Total = position.spent + position.in_balance
+  </Step>
+  
+  <Step title="Refund all tokens">
+    Transfer total in in_denom
+  </Step>
+  
+  <Step title="Update position">
+    Set exit_date
+  </Step>
+</Steps>
+
+**Example:**
+```rust
+// Position state
+position.spent = 200
+position.in_balance = 50
+
+// Total refund
+let total = 200 + 50 = 250
+
+// Transfer:
+// - Subscriber receives 250 in_denom (full refund)
+// - No exit fee charged
+// - No out_tokens received
+```
+
+### With Subscriber Vesting
+
+If subscriber vesting is configured:
+
+```rust
+// Instead of direct transfer
+// Purchased tokens go to vesting contract
+
+let vesting_addr = instantiate_vesting(
+    subscriber,
+    purchased_amount,
+    out_denom,
+    subscriber_vesting_config
+);
+
+// Subscriber can claim from vesting contract over time
+```
+
+Query your vesting contract:
+```rust
+let vesting_addr: String = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::SubscriberVesting {
+        addr: subscriber.to_string()
+    }
+)?;
+```
+
+<Warning>
+Subscribers can only exit once. After exiting, `position.exit_date` is set and the position cannot be modified.
+</Warning>
+
+## Real-World Example
+
+Complete finalization workflow:
+
+```rust
+use cosmwasm_std::{coin, Addr};
+use streamswap_types::stream::{
+    ExecuteMsg, QueryMsg, StreamResponse, Status, FinalizedStatus
+};
+use streamswap_types::controller::CreatePool;
+
+// === Creator Side ===
+
+// 1. Wait for stream to end
+app.set_block_time(end_time.plus_seconds(1));
+
+// 2. Check stream is ended
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Stream {}
+)?;
+
+assert_eq!(stream.status, Status::Ended);
+
+// 3. Finalize stream (with pool creation)
+let finalize_msg = ExecuteMsg::FinalizeStream {
+    new_treasury: None,
+    create_pool: Some(CreatePool::ConcentratedLiquidity {
+        lower_tick: 500,
+        upper_tick: 100000,
+        tick_spacing: 100,
+        spread_factor: "0.01".to_string(),
+    }),
+    salt: None, // Add if creator_vesting enabled
+};
+
+let res = app.execute_contract(
+    stream_admin,
+    stream_address.clone(),
+    &finalize_msg,
+    &[]
+)?;
+
+// 4. Check finalization result
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Stream {}
+)?;
+
+assert_eq!(
+    stream.status,
+    Status::Finalized(FinalizedStatus::ThresholdReached)
+);
+
+// === Subscriber Side ===
+
+// 5. Sync position before exit
+let sync_msg = ExecuteMsg::SyncPosition {};
+app.execute_contract(
+    subscriber.clone(),
+    stream_address.clone(),
+    &sync_msg,
+    &[]
+)?;
+
+// 6. Check purchased amount
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Position { owner: subscriber.to_string() }
+)?;
+
+println!("Purchased: {}", position.purchased);
+println!("Unspent balance: {}", position.in_balance);
+
+// 7. Exit stream
+let exit_msg = ExecuteMsg::ExitStream {
+    salt: None, // Add if subscriber_vesting enabled
+};
+
+let res = app.execute_contract(
+    subscriber.clone(),
+    stream_address.clone(),
+    &exit_msg,
+    &[]
+)?;
+
+// 8. Verify tokens received
+let balance = app.query_balance(subscriber, out_denom)?;
+assert_eq!(balance.amount, position.purchased);
+
+// 9. Check position is exited
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Position { owner: subscriber.to_string() }
+)?;
+
+assert!(position.exit_date > Timestamp::from_seconds(0));
+```
+
+## Error Handling
+
+Common finalization errors:
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `Unauthorized` | Not stream admin | Use stream_admin address |
+| `OperationNotAllowed` | Wrong stream status | Wait for Ended status |
+| `InvalidPoolConfig` | Pool params mismatch | Match create_pool to pool_config |
+| `SubscriberAlreadyExited` | Already exited | Cannot exit twice |
+
+## Best Practices
+
+### For Stream Creators
+
+1. **Monitor stream progress** - Track subscriptions and spending
+2. **Finalize promptly** - Finalize soon after stream ends
+3. **Test pool parameters** - Validate tick ranges before creation
+4. **Consider vesting** - Use vesting to build long-term alignment
+
+### For Subscribers
+
+1. **Sync before checking** - Always sync position before querying final amounts
+2. **Exit after finalization** - Wait for Finalized status before exiting
+3. **Save vesting address** - If vesting enabled, save contract address for claiming
+4. **Monitor refunds** - Check if threshold was reached for refund eligibility
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Pool Creation" icon="water" href="/guides/pool-creation">
+    Learn about automatic pool creation
+  </Card>
+  <Card title="Vesting" icon="clock" href="/guides/vesting">
+    Configure vesting schedules
+  </Card>
+</CardGroup>

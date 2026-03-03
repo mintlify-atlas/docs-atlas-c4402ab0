@@ -1,0 +1,434 @@
+---
+title: PoolConfig & CreatePool Types
+description: Post-stream liquidity pool configuration
+icon: 'water'
+---
+
+## Overview
+
+StreamSwap can automatically create a liquidity pool after a stream completes successfully. This provides immediate liquidity for the distributed token.
+
+**Two related types:**
+- **PoolConfig** - Configuration set at stream creation (what type of pool and how much liquidity)
+- **CreatePool** - Parameters set at finalization (specific pool settings like tick ranges)
+
+---
+
+## PoolConfig
+
+Specified when creating a stream. Defines the type and amount of liquidity to allocate.
+
+```rust
+pub enum PoolConfig {
+    ConcentratedLiquidity { 
+        out_amount_clp: Uint256 
+    },
+}
+```
+
+### ConcentratedLiquidity
+
+<ParamField path="out_amount_clp" type="Uint256" required>
+  Amount of `out_asset` tokens to allocate to the concentrated liquidity pool.
+  
+  This is **separate** from the tokens being streamed.
+</ParamField>
+
+**Requirements:**
+- Must be ≤ total `out_asset` amount
+- Must be > 0
+- Creator must send these additional tokens when creating the stream
+- Creator must also send pool creation fees
+
+**Example:**
+```json
+{
+  "pool_config": {
+    "concentrated_liquidity": {
+      "out_amount_clp": "500000000000"
+    }
+  }
+}
+```
+
+**In this example:**
+- Stream has 1,000,000,000,000 tokens total
+- 500,000,000,000 will go to the pool after stream ends
+- 500,000,000,000 will be streamed to subscribers
+
+---
+
+## CreatePool
+
+Specified when finalizing a stream. Defines specific pool parameters.
+
+```rust
+pub enum CreatePool {
+    ConcentratedLiquidity {
+        lower_tick: i64,
+        upper_tick: i64,
+        tick_spacing: u64,
+        spread_factor: String,
+    },
+}
+```
+
+### ConcentratedLiquidity Parameters
+
+<ParamField path="lower_tick" type="i64" required>
+  Lower bound of the price range for the concentrated liquidity position.
+  
+  Defines the minimum price at which liquidity is active.
+</ParamField>
+
+<ParamField path="upper_tick" type="i64" required>
+  Upper bound of the price range for the concentrated liquidity position.
+  
+  Defines the maximum price at which liquidity is active.
+</ParamField>
+
+<ParamField path="tick_spacing" type="u64" required>
+  Tick spacing for the pool. Must match Osmosis pool requirements.
+  
+  Common values:
+  - `1` - Very dense liquidity
+  - `10` - Standard spacing
+  - `100` - Wide spacing
+  - `1000` - Very wide spacing
+</ParamField>
+
+<ParamField path="spread_factor" type="string" required>
+  Swap fee for the pool as a decimal string.
+  
+  Examples:
+  - `"0.002"` - 0.2% fee
+  - `"0.003"` - 0.3% fee
+  - `"0.005"` - 0.5% fee
+</ParamField>
+
+---
+
+## Understanding Concentrated Liquidity
+
+### Price Ranges (Ticks)
+
+Concentrated liquidity allows you to provide liquidity within a specific price range:
+
+```
+Price:    0.1    0.5    1.0    2.0    5.0
+           |------|=======|------|      (Your liquidity)
+                  ^              ^
+              lower_tick    upper_tick
+```
+
+**Benefits:**
+- Higher capital efficiency within the range
+- Earns more fees when price is in range
+- No liquidity wasted outside the range
+
+**Risks:**
+- No trading happens outside the range
+- Needs rebalancing if price moves out of range
+
+### Tick Calculation
+
+Ticks are logarithmic price representations. To calculate:
+
+```typescript
+function priceToTick(price: number): number {
+  return Math.floor(Math.log(price) / Math.log(1.0001));
+}
+
+function tickToPrice(tick: number): number {
+  return Math.pow(1.0001, tick);
+}
+
+// Example: Set range from 0.5 to 2.0
+const lowerTick = priceToTick(0.5);  // -6932
+const upperTick = priceToTick(2.0);  // 6931
+```
+
+### Choosing Parameters
+
+<AccordionGroup>
+  <Accordion title="Tight Range (Lower Risk)">
+    ```typescript
+    // Example: 0.8 to 1.2 (±20% from current price)
+    {
+      lower_tick: -2231,
+      upper_tick: 1823,
+      tick_spacing: 100,
+      spread_factor: "0.003"
+    }
+    ```
+    
+    **Use when:**
+    - Expecting stable price
+    - Want higher capital efficiency
+    - Can actively manage
+    
+    **Risk:** Price moves out of range quickly
+  </Accordion>
+  
+  <Accordion title="Moderate Range (Balanced)">
+    ```typescript
+    // Example: 0.5 to 2.0 (±50% from current price)
+    {
+      lower_tick: -6932,
+      upper_tick: 6931,
+      tick_spacing: 100,
+      spread_factor: "0.003"
+    }
+    ```
+    
+    **Use when:**
+    - Moderate price volatility expected
+    - Balancing efficiency and safety
+    - Standard approach
+    
+    **Risk:** Moderate
+  </Accordion>
+  
+  <Accordion title="Wide Range (Lower Risk)">
+    ```typescript
+    // Example: Full range (like traditional AMM)
+    {
+      lower_tick: -108000000,
+      upper_tick: 108000000,
+      tick_spacing: 100,
+      spread_factor: "0.005"
+    }
+    ```
+    
+    **Use when:**
+    - High uncertainty about price
+    - Want guaranteed liquidity
+    - Cannot actively manage
+    
+    **Risk:** Lower capital efficiency
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Complete Example: Stream with Pool Creation
+
+### Step 1: Create Stream with PoolConfig
+
+```typescript
+import { randomBytes } from 'crypto';
+
+const outAmount = "1000000000000"; // 1M tokens total
+const poolAmount = "500000000000";  // 500K for pool
+const streamAmount = "500000000000"; // 500K to stream
+
+// NOTE: Must send outAmount + poolAmount = 1.5M tokens
+const createStreamMsg = {
+  create_stream: {
+    msg: {
+      treasury: treasuryAddress,
+      stream_admin: adminAddress,
+      name: "MYTOKEN Launch with Liquidity",
+      out_asset: {
+        denom: "factory/osmo.../mytoken",
+        amount: streamAmount,
+      },
+      in_denom: "uosmo",
+      bootstraping_start_time: "1735689600000000000",
+      start_time: "1735776000000000000",
+      end_time: "1736380800000000000",
+      pool_config: {
+        concentrated_liquidity: {
+          out_amount_clp: poolAmount,
+        },
+      },
+      salt: Buffer.from(randomBytes(32)).toString('base64'),
+      tos_version: "v1.0.0",
+    },
+  },
+};
+
+const funds = [
+  { denom: "uosmo", amount: "1000000" }, // Creation fee
+  { 
+    denom: "factory/osmo.../mytoken", 
+    amount: "1500000000000" // Total: stream + pool
+  },
+  // Add pool creation fees (query from Osmosis)
+  { denom: "uosmo", amount: "1000000000" }, // Example pool creation fee
+];
+
+const result = await client.execute(
+  senderAddress,
+  controllerAddress,
+  createStreamMsg,
+  "auto",
+  undefined,
+  funds
+);
+```
+
+### Step 2: Finalize Stream with CreatePool
+
+```typescript
+// After stream ends and is successful
+
+// Calculate current stream average price
+const stream = await client.queryContractSmart(streamAddress, {
+  stream: {},
+});
+
+const avgPriceRes = await client.queryContractSmart(streamAddress, {
+  average_price: {},
+});
+
+const avgPrice = parseFloat(avgPriceRes.average_price);
+console.log(`Average stream price: ${avgPrice} OSMO per token`);
+
+// Set pool range around average price (±50%)
+const lowerPrice = avgPrice * 0.5;
+const upperPrice = avgPrice * 1.5;
+
+const lowerTick = Math.floor(Math.log(lowerPrice) / Math.log(1.0001));
+const upperTick = Math.floor(Math.log(upperPrice) / Math.log(1.0001));
+
+// Round to tick spacing
+const tickSpacing = 100;
+const roundedLowerTick = Math.floor(lowerTick / tickSpacing) * tickSpacing;
+const roundedUpperTick = Math.ceil(upperTick / tickSpacing) * tickSpacing;
+
+console.log(`Pool range: ${lowerPrice.toFixed(6)} to ${upperPrice.toFixed(6)}`);
+console.log(`Ticks: ${roundedLowerTick} to ${roundedUpperTick}`);
+
+// Finalize with pool creation
+const finalizeMsg = {
+  finalize_stream: {
+    create_pool: {
+      concentrated_liquidity: {
+        lower_tick: roundedLowerTick,
+        upper_tick: roundedUpperTick,
+        tick_spacing: tickSpacing,
+        spread_factor: "0.003", // 0.3% fee
+      },
+    },
+    salt: Buffer.from(randomBytes(32)).toString('base64'),
+  },
+};
+
+const finalizeResult = await client.execute(
+  adminAddress,
+  streamAddress,
+  finalizeMsg,
+  "auto"
+);
+
+console.log("Stream finalized with pool creation!");
+```
+
+---
+
+## Pool Creation Flow
+
+1. **Stream Creation:**
+   - Creator specifies `pool_config` with `out_amount_clp`
+   - Sends extra tokens for pool
+   - Sends pool creation fees
+
+2. **During Stream:**
+   - Pool tokens held in stream contract
+   - Stream operates normally
+
+3. **Finalization:**
+   - Admin calls `finalize_stream` with `create_pool` parameters
+   - Contract creates CL pool on Osmosis
+   - Adds liquidity: `out_amount_clp` + portion of `spent_in`
+   - Returns pool position to creator (can manage later)
+
+4. **Result:**
+   - Immediate trading liquidity available
+   - Price discovery continues in pool
+   - Creator owns the LP position
+
+---
+
+## Validation Rules
+
+<AccordionGroup>
+  <Accordion title="PoolConfig Validation">
+    - `out_amount_clp` must be > 0
+    - `out_amount_clp` must be ≤ `out_asset.amount`
+    - Must send additional tokens with create transaction
+    - Must send pool creation fees
+  </Accordion>
+  
+  <Accordion title="CreatePool Validation">
+    - Required if stream was created with `pool_config`
+    - `lower_tick < upper_tick`
+    - Ticks must be valid for Osmosis CL pools
+    - `tick_spacing` must be valid (typically 1, 10, 100, or 1000)
+    - `spread_factor` must be valid (e.g., 0.002, 0.003, 0.005)
+  </Accordion>
+  
+  <Accordion title="Finalization Requirements">
+    - Stream must have reached threshold
+    - Only callable by stream admin
+    - Must have sufficient tokens and fees in contract
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Best Practices
+
+<Card title="Pool Range Selection" icon="bullseye">
+  **Consider stream price dynamics:**
+  
+  1. **Query average price** from the stream
+  2. **Set range around average** (e.g., ±50%)
+  3. **Use wider ranges** for:
+     - New/volatile tokens
+     - Smaller market caps
+     - Less predictable demand
+  4. **Use tighter ranges** for:
+     - Established tokens
+     - Stablecoins
+     - Known price targets
+</Card>
+
+<Card title="Liquidity Allocation" icon="scale-balanced">
+  **Balance between streaming and pool:**
+  
+  - **More for streaming** (70/30): Wider distribution, less initial liquidity
+  - **Balanced** (50/50): Good distribution with solid liquidity
+  - **More for pool** (30/70): Immediate deep liquidity, narrower distribution
+  
+  Consider your goals: distribution vs. immediate liquidity
+</Card>
+
+<Card title="Fee Selection" icon="percent">
+  **Pool swap fees:**
+  
+  - **0.2%** - For established/stable pairs
+  - **0.3%** - Standard for most tokens
+  - **0.5%+** - For volatile/risky tokens
+  
+  Higher fees = more LP revenue but less trading volume
+</Card>
+
+---
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Stream Instantiation" icon="rocket" href="/api/stream/instantiate">
+    How to create a stream with pool config
+  </Card>
+  
+  <Card title="Finalize Stream" icon="flag-checkered" href="/api/stream/execute">
+    Finalize stream and create the pool
+  </Card>
+  
+  <Card title="Osmosis CL Pools" icon="link" href="https://docs.osmosis.zone/osmosis-core/modules/concentrated-liquidity">
+    Learn more about Osmosis Concentrated Liquidity
+  </Card>
+</CardGroup>

@@ -1,0 +1,552 @@
+---
+title: 'Pool Creation'
+description: 'Automatically create liquidity pools after StreamSwap streams end'
+---
+
+StreamSwap can automatically create liquidity pools using unsold tokens and collected revenue after a stream ends. This guide covers pool configuration and the creation process.
+
+## Overview
+
+Pool creation allows stream creators to:
+- Automatically establish liquidity after token distribution
+- Allocate a portion of tokens and revenue to a DEX pool
+- Create concentrated liquidity positions (Osmosis)
+- Bootstrap trading immediately after stream ends
+
+<Note>
+Currently, only Osmosis concentrated liquidity pools are supported. Additional DEX integrations may be added in the future.
+</Note>
+
+## Configuration During Stream Creation
+
+Pool creation is configured when creating a stream using `pool_config`:
+
+```rust
+use streamswap_types::controller::{CreateStreamMsg, PoolConfig};
+
+let create_stream_msg = CreateStreamMsg {
+    // ... other parameters
+    pool_config: Some(PoolConfig::ConcentratedLiquidity {
+        out_amount_clp: Uint256::from(200_000u128)
+    }),
+    // ...
+};
+```
+
+### PoolConfig::ConcentratedLiquidity
+
+The `out_amount_clp` parameter specifies how many `out_asset` tokens to allocate to the pool:
+
+```rust
+pub enum PoolConfig {
+    ConcentratedLiquidity {
+        out_amount_clp: Uint256,  // Amount of out_asset for pool
+    },
+}
+```
+
+<Warning>
+`out_amount_clp` must be:
+- Greater than zero
+- Less than or equal to `out_asset.amount`
+- Typically 10-30% of total supply for initial liquidity
+</Warning>
+
+## Required Funds
+
+When creating a stream with pool configuration, you must send additional funds:
+
+```rust
+let funds = vec![
+    coin(100, "uosmo"),                    // stream_creation_fee
+    coin(1_000_000, "token"),              // out_asset amount
+    coin(1_000_000, "uosmo"),              // pool_creation_fee (from chain)
+    coin(200_000, "token"),                // out_amount_clp
+];
+
+app.execute_contract(
+    creator,
+    controller_address,
+    &create_stream_msg,
+    &funds
+)?;
+```
+
+### Pool Creation Fee
+
+Query the pool creation fee from Osmosis:
+
+```rust
+use osmosis_std::types::osmosis::poolmanager::v1beta1::PoolmanagerQuerier;
+
+let pool_params = PoolmanagerQuerier::new(&deps.querier)
+    .params()?
+    .params
+    .unwrap();
+
+let pool_creation_fee: Vec<Coin> = pool_params.pool_creation_fee
+    .iter()
+    .map(|c| Coin {
+        denom: c.denom.clone(),
+        amount: Uint128::from_str(&c.amount)?,
+    })
+    .collect();
+```
+
+<Note>
+Pool creation fees are chain-specific and may change. Always query dynamically.
+</Note>
+
+## Pool Creation Parameters
+
+When finalizing the stream, provide pool creation parameters:
+
+```rust
+use streamswap_types::controller::CreatePool;
+
+let finalize_msg = ExecuteMsg::FinalizeStream {
+    new_treasury: None,
+    create_pool: Some(CreatePool::ConcentratedLiquidity {
+        lower_tick: 500,
+        upper_tick: 100000,
+        tick_spacing: 100,
+        spread_factor: "0.01".to_string(),
+    }),
+    salt: None,
+};
+```
+
+### CreatePool Parameters
+
+```rust
+pub enum CreatePool {
+    ConcentratedLiquidity {
+        lower_tick: i64,        // Minimum price tick
+        upper_tick: i64,        // Maximum price tick
+        tick_spacing: u64,      // Tick spacing (100, 1, etc.)
+        spread_factor: String,  // Fee percentage ("0.01" = 1%)
+    },
+}
+```
+
+#### lower_tick & upper_tick
+
+Define the price range for concentrated liquidity:
+
+```rust
+lower_tick: 500,      // Minimum price
+upper_tick: 100000,   // Maximum price
+```
+
+**Choosing tick ranges:**
+- Narrower ranges provide more capital efficiency
+- Wider ranges reduce impermanent loss risk
+- Consider expected price volatility
+- Research current market prices
+
+<Tabs>
+  <Tab title="Conservative (Wide)">
+    ```rust
+    lower_tick: -100000,
+    upper_tick: 100000,
+    ```
+    
+    Provides liquidity across a very wide price range. Lower capital efficiency but safer.
+  </Tab>
+  
+  <Tab title="Balanced">
+    ```rust
+    lower_tick: 500,
+    upper_tick: 50000,
+    ```
+    
+    Moderate range suitable for most tokens. Good balance of efficiency and safety.
+  </Tab>
+  
+  <Tab title="Aggressive (Narrow)">
+    ```rust
+    lower_tick: 5000,
+    upper_tick: 15000,
+    ```
+    
+    Concentrated around expected price. Maximum capital efficiency but higher risk.
+  </Tab>
+</Tabs>
+
+#### tick_spacing
+
+Tick granularity for the pool:
+
+```rust
+tick_spacing: 100  // Common values: 1, 10, 100
+```
+
+- **100**: Standard spacing for most pairs (1% fee pools)
+- **10**: Tighter spacing for stable pairs
+- **1**: Finest spacing for very stable pairs
+
+<Warning>
+`tick_spacing` must match the `spread_factor` tier:
+- 1% spread: tick_spacing = 100
+- 0.3% spread: tick_spacing = 60
+- 0.05% spread: tick_spacing = 1
+</Warning>
+
+#### spread_factor
+
+Trading fee percentage:
+
+```rust
+spread_factor: "0.01"  // 1%
+spread_factor: "0.003" // 0.3%
+spread_factor: "0.0005" // 0.05%
+```
+
+**Choosing spread factors:**
+- **1% (0.01)**: Most volatile pairs
+- **0.3% (0.003)**: Standard pairs
+- **0.05% (0.0005)**: Stable pairs (e.g., USDC/USDT)
+
+## Pool Creation Process
+
+During stream finalization, the pool is created automatically:
+
+<Steps>
+  <Step title="Calculate pool allocations">
+    Determine how much of each token to allocate to the pool.
+  </Step>
+  
+  <Step title="Query next pool ID">
+    Get the next pool ID from the chain.
+  </Step>
+  
+  <Step title="Create pool">
+    Execute MsgCreateConcentratedPool on Osmosis.
+  </Step>
+  
+  <Step title="Create initial position">
+    Add liquidity with MsgCreatePosition.
+  </Step>
+  
+  <Step title="Update creator revenue">
+    Deduct pool allocation from creator's revenue.
+  </Step>
+</Steps>
+
+### Token Allocation Calculation
+
+```rust
+// Out token allocation (configured)
+let pool_out_amount = 200_000; // from pool_config.out_amount_clp
+
+// In token allocation (proportional)
+let pool_ratio = pool_out_amount / out_asset.amount;
+let pool_in_amount = pool_ratio * creator_revenue;
+
+// Example:
+// out_asset: 1,000,000 tokens
+// pool_out_amount: 200,000 (20%)
+// creator_revenue: 100,000 in_denom
+// pool_in_amount: 0.20 * 100,000 = 20,000 in_denom
+```
+
+The implementation:
+
+```rust
+pub fn calculate_in_amount_clp(
+    out_amount: Uint256,
+    pool_out_amount: Uint256,
+    creators_revenue: Uint256,
+) -> Uint256 {
+    let ratio = Decimal256::from_ratio(pool_out_amount, out_amount);
+    let dec_creators_revenue = Decimal256::from_ratio(creators_revenue, Uint256::one());
+    let dec_clp_amount = ratio * dec_creators_revenue;
+    dec_clp_amount * Uint256::one()
+}
+```
+
+### Pool Creation Messages
+
+#### 1. Create Pool
+
+```rust
+use osmosis_std::types::osmosis::concentratedliquidity::poolmodel::concentrated::v1beta1::MsgCreateConcentratedPool;
+
+let create_pool_msg = MsgCreateConcentratedPool {
+    sender: stream_address.to_string(),
+    denom0: out_denom.clone(),
+    denom1: in_denom.clone(),
+    tick_spacing: 100,
+    spread_factor: "0.01".to_string(),
+};
+```
+
+#### 2. Create Initial Position
+
+```rust
+use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePosition;
+
+let create_position_msg = MsgCreatePosition {
+    pool_id: next_pool_id,
+    sender: stream_address.to_string(),
+    lower_tick: 500,
+    upper_tick: 100000,
+    tokens_provided: vec![
+        osmosis_std::types::cosmos::base::v1beta1::Coin {
+            denom: out_denom.clone(),
+            amount: pool_out_amount.to_string(),
+        },
+        osmosis_std::types::cosmos::base::v1beta1::Coin {
+            denom: in_denom.clone(),
+            amount: pool_in_amount.to_string(),
+        },
+    ],
+    token_min_amount0: "0".to_string(),
+    token_min_amount1: "0".to_string(),
+};
+```
+
+<Note>
+The stream contract becomes the initial LP position owner. Consider transferring ownership or withdrawing liquidity later.
+</Note>
+
+## Pool Refunds
+
+If the stream threshold is not met, pool funds are refunded:
+
+```rust
+// Threshold not reached - refund pool allocation
+pub fn pool_refund(
+    deps: &DepsMut,
+    pool_config: Option<PoolConfig>,
+    out_denom: String,
+) -> Result<Vec<Coin>, ContractError> {
+    if let Some(PoolConfig::ConcentratedLiquidity { out_amount_clp }) = pool_config {
+        let mut refund = vec![Coin {
+            denom: out_denom,
+            amount: Uint128::try_from(out_amount_clp)?,
+        }];
+        
+        // Add pool creation fee
+        refund.extend(get_pool_creation_fee(deps)?);
+        
+        Ok(refund)
+    } else {
+        Ok(vec![])
+    }
+}
+```
+
+Refunds include:
+- `out_amount_clp` tokens
+- Pool creation fee
+
+All refunds are sent to the treasury.
+
+## Real-World Example
+
+Complete pool creation workflow:
+
+```rust
+use cosmwasm_std::{coin, Uint256};
+use streamswap_types::controller::{
+    CreateStreamMsg, PoolConfig, CreatePool
+};
+use streamswap_types::stream::ExecuteMsg;
+
+// === Stream Creation ===
+
+// 1. Prepare pool configuration
+let out_supply = 1_000_000u128;
+let pool_out_allocation = 200_000u128; // 20% to pool
+
+let pool_config = PoolConfig::ConcentratedLiquidity {
+    out_amount_clp: Uint256::from(pool_out_allocation),
+};
+
+// 2. Query pool creation fee
+let pool_creation_fee = query_pool_creation_fee()?; // e.g., coin(1_000_000, "uosmo")
+
+// 3. Create stream with pool config
+let create_stream_msg = CreateStreamMsg {
+    treasury: treasury_addr.to_string(),
+    stream_admin: admin_addr.to_string(),
+    name: "my-stream-with-pool".to_string(),
+    out_asset: coin(out_supply, "token"),
+    in_denom: "uosmo".to_string(),
+    pool_config: Some(pool_config),
+    // ... other params
+};
+
+let funds = vec![
+    coin(100, "uosmo"),                    // stream_creation_fee
+    coin(out_supply, "token"),             // out_asset
+    pool_creation_fee,                      // pool creation fee
+    coin(pool_out_allocation, "token"),    // pool allocation
+];
+
+let res = app.execute_contract(
+    creator,
+    controller_address,
+    &ExecuteMsg::CreateStream {
+        msg: Box::new(create_stream_msg)
+    },
+    &funds,
+)?;
+
+// === Stream Finalization ===
+
+// 4. After stream ends, finalize with pool params
+app.set_block_time(end_time.plus_seconds(1));
+
+let finalize_msg = ExecuteMsg::FinalizeStream {
+    new_treasury: None,
+    create_pool: Some(CreatePool::ConcentratedLiquidity {
+        lower_tick: 500,
+        upper_tick: 100000,
+        tick_spacing: 100,
+        spread_factor: "0.01".to_string(),
+    }),
+    salt: None,
+};
+
+let res = app.execute_contract(
+    admin_addr,
+    stream_address,
+    &finalize_msg,
+    &[],
+)?;
+
+// 5. Verify pool creation
+let pool_id = get_attribute(&res, "pool_id")?.parse::<u64>()?;
+let pool_out_amount = get_attribute(&res, "pool_out_amount")?;
+let pool_in_amount = get_attribute(&res, "pool_in_amount")?;
+
+println!("Pool created: ID {}", pool_id);
+println!("Out tokens: {}", pool_out_amount);
+println!("In tokens: {}", pool_in_amount);
+```
+
+## Validation and Errors
+
+### During Stream Creation
+
+```rust
+// Validate pool amount
+if pool_out_amount.is_zero() {
+    return Err(ControllerError::InvalidPoolOutAmount);
+}
+
+if pool_out_amount > out_asset.amount {
+    return Err(ControllerError::InvalidPoolOutAmount);
+}
+
+// Validate funds sent
+let required_pool_out = coin(pool_out_amount, out_asset.denom);
+let required_creation_fee = get_pool_creation_fee(&deps)?;
+
+if !funds.contains(&required_pool_out) {
+    return Err(ControllerError::InsufficientPoolFunds);
+}
+```
+
+### During Finalization
+
+```rust
+// Must provide create_pool if pool_config exists
+match (pool_config, create_pool) {
+    (Some(_), Some(params)) => {
+        // Valid - create pool
+    },
+    (None, None) => {
+        // Valid - no pool
+    },
+    _ => {
+        return Err(ContractError::InvalidPoolConfig);
+    }
+}
+```
+
+Common errors:
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `InvalidPoolOutAmount` | Amount is 0 or > supply | Set valid pool amount |
+| `InvalidPoolConfig` | Mismatch between config and params | Match create_pool to pool_config |
+| `InsufficientPoolFunds` | Missing pool creation fee/tokens | Send all required funds |
+| `InvalidTickSpacing` | Tick spacing doesn't match spread | Use correct spacing for fee tier |
+
+## Best Practices
+
+### Pool Size
+
+<Tabs>
+  <Tab title="Small Allocation (10-15%)">
+    **Pros:**
+    - More tokens for stream distribution
+    - Lower initial liquidity needs
+    
+    **Cons:**
+    - Less immediate trading liquidity
+    - Higher slippage for early traders
+    
+    **Best for:** High-demand tokens with strong community
+  </Tab>
+  
+  <Tab title="Medium Allocation (20-30%)">
+    **Pros:**
+    - Balanced distribution and liquidity
+    - Good for most scenarios
+    
+    **Cons:**
+    - Moderate trade-offs
+    
+    **Best for:** Most token launches
+  </Tab>
+  
+  <Tab title="Large Allocation (40-50%)">
+    **Pros:**
+    - Deep immediate liquidity
+    - Low slippage for traders
+    
+    **Cons:**
+    - Less tokens for distribution
+    - Higher pool maintenance
+    
+    **Best for:** Stable coins or low-volatility tokens
+  </Tab>
+</Tabs>
+
+### Tick Range Strategy
+
+1. **Research price expectations** - Analyze comparable tokens
+2. **Consider volatility** - Wider ranges for volatile tokens
+3. **Test with small amounts** - Validate parameters on testnet
+4. **Plan for rebalancing** - Monitor and adjust position later
+
+### Fee Tier Selection
+
+```rust
+// High volatility / New token
+spread_factor: "0.01"  // 1%
+tick_spacing: 100
+
+// Moderate volatility / Established token
+spread_factor: "0.003" // 0.3%
+tick_spacing: 60
+
+// Low volatility / Stable token
+spread_factor: "0.0005" // 0.05%
+tick_spacing: 1
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Finalizing Streams" icon="flag-checkered" href="/guides/finalizing-streams">
+    Learn the complete finalization process
+  </Card>
+  <Card title="Vesting" icon="clock" href="/guides/vesting">
+    Combine pools with vesting schedules
+  </Card>
+</CardGroup>

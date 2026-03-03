@@ -1,0 +1,366 @@
+---
+title: Pricing Mechanism
+description: How StreamSwap calculates and discovers token prices dynamically
+---
+
+StreamSwap implements a dynamic price discovery mechanism that calculates token prices based on actual spending and distribution. Unlike traditional AMMs with bonding curves, StreamSwap's pricing is purely discovery-based, reflecting the true market valuation as the stream progresses.
+
+## Average Price
+
+The average price represents the overall price per out token based on all spending throughout the stream.
+
+### Calculation
+
+```rust contracts/stream/src/contract.rs
+pub fn query_average_price(deps: Deps, _env: Env) -> StdResult<AveragePriceResponse> {
+    let stream = STREAM_STATE.load(deps.storage)?;
+    let total_purchased = to_uint256(stream.out_asset.amount) - stream.out_remaining;
+    let average_price = Decimal256::from_ratio(stream.spent_in, total_purchased);
+    Ok(AveragePriceResponse { average_price })
+}
+```
+
+**Formula:**
+```
+average_price = spent_in / (out_supply - out_remaining)
+              = spent_in / total_distributed
+```
+
+### What It Represents
+
+- **Cumulative valuation**: All spending from stream start to current time
+- **Historical average**: Weighted by actual participation
+- **Exit reference**: Used for calculating final positions
+- **Performance metric**: Shows overall stream pricing
+
+### Example
+
+```
+Initial State:
+  out_supply: 1,000,000 tokens
+  out_remaining: 1,000,000 tokens
+  spent_in: 0 USDC
+
+After 25% of stream:
+  out_remaining: 750,000 tokens
+  spent_in: 50,000 USDC
+  total_distributed: 250,000 tokens
+  
+  average_price = 50,000 / 250,000 = 0.20 USDC per token
+
+After 50% of stream:
+  out_remaining: 500,000 tokens
+  spent_in: 120,000 USDC
+  total_distributed: 500,000 tokens
+  
+  average_price = 120,000 / 500,000 = 0.24 USDC per token
+```
+
+## Current Streamed Price
+
+The current streamed price represents the instantaneous price of the most recent distribution period.
+
+### Calculation
+
+```rust contracts/stream/src/stream.rs
+if !new_distribution_balance.is_zero() {
+    stream.out_remaining -= new_distribution_balance;
+    stream.dist_index += Decimal256::from_ratio(new_distribution_balance, stream.shares);
+    stream.current_streamed_price = Decimal256::from_ratio(spent_in, new_distribution_balance);
+}
+```
+
+**Formula:**
+```
+current_streamed_price = spent_in_delta / distributed_out_delta
+```
+
+### What It Represents
+
+- **Spot price**: Latest distribution period pricing
+- **Real-time discovery**: Reflects most recent market activity
+- **Trend indicator**: Shows price movement direction
+- **Entry reference**: Current terms for new subscribers
+
+### Query Interface
+
+```rust contracts/stream/src/contract.rs
+pub fn query_last_streamed_price(deps: Deps, _env: Env) -> StdResult<LatestStreamedPriceResponse> {
+    let stream = STREAM_STATE.load(deps.storage)?;
+    Ok(LatestStreamedPriceResponse {
+        current_streamed_price: stream.current_streamed_price,
+    })
+}
+```
+
+### Volatility Over Time
+
+The current streamed price can fluctuate as:
+- New participants enter (increasing spending)
+- Participants withdraw (decreasing spending)
+- Time progresses (natural distribution)
+
+```
+Time T1 (100 participants, high activity):
+  spent_in_delta: 10,000 USDC
+  distributed_delta: 25,000 tokens
+  current_price: 0.40 USDC per token
+
+Time T2 (150 participants, very high activity):
+  spent_in_delta: 20,000 USDC
+  distributed_delta: 25,000 tokens
+  current_price: 0.80 USDC per token
+
+Time T3 (140 participants, some withdrawals):
+  spent_in_delta: 12,000 USDC
+  distributed_delta: 25,000 tokens
+  current_price: 0.48 USDC per token
+```
+
+## Price Discovery Dynamics
+
+StreamSwap's pricing is emergent, not predetermined.
+
+### No Bonding Curve
+
+Unlike traditional AMMs, there is no mathematical curve dictating price:
+
+```diff
+- Traditional AMM: price = f(supply, reserve) // Predetermined function
++ StreamSwap: price = spent / distributed       // Purely market-driven
+```
+
+### Supply and Demand
+
+Prices reflect actual participant behavior:
+
+**High Demand Period:**
+```
+Many subscriptions → High in_supply → More spending per period
+→ Higher spent_in_delta → Higher current_streamed_price
+```
+
+**Low Demand Period:**
+```
+Few subscriptions + withdrawals → Lower in_supply → Less spending per period
+→ Lower spent_in_delta → Lower current_streamed_price
+```
+
+### Continuous Adjustment
+
+The price discovery happens continuously during the Active state:
+
+```rust contracts/stream/src/stream.rs
+pub fn sync_stream(stream: &mut StreamState, now: Timestamp) {
+    let diff = calculate_diff(
+        stream.status_info.start_time,
+        stream.status_info.end_time,
+        stream.status_info.last_updated,
+        now,
+    );
+
+    if !stream.shares.is_zero() && !diff.is_zero() {
+        let new_distribution_balance = stream
+            .out_remaining
+            .multiply_ratio(diff.numerator(), diff.denominator());
+        let spent_in = stream
+            .in_supply
+            .multiply_ratio(diff.numerator(), diff.denominator());
+
+        stream.spent_in += spent_in;
+        stream.in_supply -= spent_in;
+
+        if !new_distribution_balance.is_zero() {
+            stream.out_remaining -= new_distribution_balance;
+            stream.dist_index += Decimal256::from_ratio(new_distribution_balance, stream.shares);
+            stream.current_streamed_price = Decimal256::from_ratio(spent_in, new_distribution_balance);
+        }
+    }
+
+    stream.status_info.last_updated = now;
+}
+```
+
+Every sync operation:
+1. Calculates time elapsed
+2. Determines distribution amount
+3. Calculates spending amount
+4. Updates current price based on ratio
+
+## Time-Based Distribution Impact
+
+The distribution mechanism ensures predictable out token release:
+
+```rust contracts/stream/src/stream.rs
+fn calculate_diff(
+    start_time: Timestamp,
+    end_time: Timestamp,
+    mut last_updated: Timestamp,
+    now: Timestamp,
+) -> Decimal {
+    if last_updated < start_time {
+        last_updated = start_time;
+    }
+    let now = if now > end_time { end_time } else { now };
+
+    let numerator = now.nanos().saturating_sub(last_updated.nanos());
+    let denominator = end_time.nanos().saturating_sub(last_updated.nanos());
+
+    if denominator == 0 || numerator == 0 {
+        Decimal::zero()
+    } else {
+        Decimal::from_ratio(numerator, denominator)
+    }
+}
+```
+
+### Linear Distribution
+
+Out tokens are released linearly over time:
+
+```
+|<------------------- Stream Duration -------------------->|
+|                                                           |
+Start                                                     End
+0%                                                       100%
+
+Distribution Rate: constant (out_supply / duration)
+Spending Rate: variable (based on in_supply)
+Price: variable (spending_rate / distribution_rate)
+```
+
+### Price Pressure Dynamics
+
+**Constant out distribution + Variable in spending = Dynamic pricing**
+
+If in_supply increases (more subscriptions):
+- Spending per period increases
+- Distribution per period stays constant
+- Price goes up
+
+If in_supply decreases (withdrawals):
+- Spending per period decreases
+- Distribution per period stays constant
+- Price goes down
+
+## Subscriber Price Calculation
+
+Individual participants get their effective price:
+
+```rust contracts/stream/src/contract.rs
+// In position sync
+let purchased = Decimal256::from_ratio(position.shares, Uint256::one())
+    .checked_mul(index_diff)?;
+
+let spent = position.in_balance.checked_sub(in_remaining)?;
+
+// Effective price for this subscriber:
+// price = position.spent / position.purchased
+```
+
+### Entry Timing Impact
+
+All participants get the same time-weighted average:
+
+```
+Stream: 0% -------- 50% -------- 100%
+
+User A subscribes at 0%:
+  Participates: 0-100% (full stream)
+  Gets: Average of all price periods
+
+User B subscribes at 50%:
+  Participates: 50-100% (half stream)
+  Gets: Average of those price periods
+  
+User C subscribes at 75%:
+  Participates: 75-100% (quarter stream)
+  Gets: Average of those price periods
+```
+
+Earlier entry ≠ better price, it just means longer participation.
+
+## Price Stability Factors
+
+### Bootstrapping Period
+
+No price discovery during bootstrapping:
+
+```rust packages/types/src/stream/stream.rs
+/// Bootstrapping status is when the stream is bootstrapping.
+/// In this status, subscriber and withdraw are permitted. 
+/// But no spending is allowed on each side.
+Bootstrapping,
+```
+
+This allows:
+- Participants to establish positions
+- Initial liquidity to form
+- No early entry advantages
+
+### Minimum Durations
+
+Protocol enforces minimum stream duration:
+
+```rust packages/types/src/controller/params.rs
+// Minimum time of a stream end_time - start_time
+pub min_stream_duration: u64,
+```
+
+Longer streams:
+- More time for price discovery
+- Smoother price changes
+- Better market efficiency
+
+### Threshold Protection
+
+Optional threshold ensures minimum viability:
+
+```rust packages/types/src/stream/stream.rs
+pub fn check_threshold(&self) -> bool {
+    match self.threshold {
+        Some(threshold) => self.spent_in >= threshold,
+        None => true,
+    }
+}
+```
+
+If threshold not met:
+- Stream finalizes as failed
+- All refunded (no price impact)
+- Protects from low-liquidity launches
+
+## Price Information Access
+
+Both prices are queryable at any time:
+
+```rust contracts/stream/src/contract.rs
+QueryMsg::AveragePrice {} => to_json_binary(&query_average_price(deps, env)?),
+QueryMsg::LastStreamedPrice {} => to_json_binary(&query_last_streamed_price(deps, env)?),
+```
+
+### Use Cases
+
+**Average Price:**
+- Overall stream performance
+- Historical analysis
+- Comparing across streams
+- Exit value calculation
+
+**Current Streamed Price:**
+- Real-time market sentiment
+- Entry decision making
+- Arbitrage detection
+- Trend analysis
+
+## Fair Launch Pricing
+
+StreamSwap's mechanism ensures:
+
+1. **No pre-mine**: Creator can't set initial price
+2. **Market discovery**: Price emerges from participation
+3. **Time-weighted fair**: No front-running advantage
+4. **Transparent**: All calculations on-chain
+5. **Equal access**: Same distribution rate for all
+
+This creates a truly fair price discovery process where the market determines value through collective participation.

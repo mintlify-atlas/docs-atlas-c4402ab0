@@ -1,0 +1,104 @@
+---
+title: Deployed Contracts
+description: Production contract addresses for StreamSwap protocol across supported networks
+---
+
+StreamSwap smart contracts are deployed across multiple Cosmos chains. Below you'll find the deployed contract addresses for each supported network.
+
+## Current Version (v0.1)
+
+The following controller contracts are currently deployed and operational:
+
+### Osmosis (osmosis-1)
+
+<CardGroup cols={3}>
+  <Card title="OSMO Controller" icon="atom">
+    ```
+    osmo17kqws7fy2qnejdw68cqjlw456gdxcdukk0wq6026u826zlda3y7qdhzqlv
+    ```
+    For creating streams with OSMO as the input token
+  </Card>
+  
+  <Card title="ATOM Controller" icon="atom">
+    ```
+    osmo10vsjh59l8mpncmsl9hggf6ryxpf0kne09qa9wtn8j6ar3mh2mdlsq9h7dh
+    ```
+    For creating streams with ATOM as the input token
+  </Card>
+  
+  <Card title="axlUSDC Controller" icon="dollar-sign">
+    ```
+    osmo1fy25p87ulxm400dd0q4zp0fzsvhl4a8g2jrq9a670lgh2asrgfrsgy60rn
+    ```
+    For creating streams with axlUSDC as the input token
+  </Card>
+</CardGroup>
+
+### Injective (injective-1)
+
+<Card title="INJ Controller" icon="atom">
+  ```
+  inj1ajlv75ypg9d2arsg4f9syxmz0k7fkad7kyen2l
+  ```
+  For creating streams with INJ as the input token
+</Card>
+
+## Network Information
+
+<AccordionGroup>
+  <Accordion title="Osmosis Network Details">
+    - **Chain ID**: osmosis-1
+    - **RPC Endpoint**: https://rpc.osmosis.zone
+    - **LCD Endpoint**: https://lcd.osmosis.zone
+    - **Explorer**: https://www.mintscan.io/osmosis
+    
+    Osmosis is a decentralized exchange built on the Cosmos SDK. StreamSwap controller contracts on Osmosis support OSMO, ATOM, and axlUSDC as input tokens.
+  </Accordion>
+  
+  <Accordion title="Injective Network Details">
+    - **Chain ID**: injective-1
+    - **RPC Endpoint**: https://sentry.tm.injective.network:443
+    - **LCD Endpoint**: https://sentry.lcd.injective.network:443
+    - **Explorer**: https://explorer.injective.network
+    
+    Injective is a decentralized exchange protocol built on Cosmos. StreamSwap supports INJ as an input token on this network.
+  </Accordion>
+</AccordionGroup>
+
+## Contract Verification
+
+All StreamSwap contracts are open source and can be verified against the published source code:
+
+- **GitHub Repository**: [StreamSwapProtocol/streamswap-contracts](https://github.com/StreamSwapProtocol/streamswap-contracts)
+- **License**: Apache 2.0
+- **Latest Release**: Check the [releases page](https://github.com/StreamSwapProtocol/streamswap-contracts/releases/latest) for the latest version
+
+<Note>
+  Contract code hashes can be queried on-chain and compared against locally compiled artifacts to verify authenticity.
+</Note>
+
+## Contract Architecture
+
+StreamSwap uses a two-contract architecture:
+
+1. **Controller Contract**: Manages the creation of new streams and handles protocol-level operations
+2. **Stream Contract**: Implements the logic for managing individual token streams, including subscriptions, distributions, and finalization
+
+Each controller address above can be used to create new stream instances. When you create a stream, a new stream contract is instantiated with your specified parameters.
+
+## Upcoming Deployments
+
+<Info>
+  Version 0.2 is currently in development. New contract addresses will be published here once deployed.
+</Info>
+
+## Using Contract Addresses
+
+To interact with these contracts:
+
+1. Choose the appropriate controller contract for your desired input token and network
+2. Submit a `CreateStream` message with your stream parameters
+3. The controller will instantiate a new stream contract and return its address
+4. Users can then interact with the stream contract directly to subscribe, withdraw, and exit
+
+For detailed integration instructions, see the [Integration Guide](/development/integration).

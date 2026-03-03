@@ -1,0 +1,416 @@
+---
+title: Architecture Overview
+description: Understand StreamSwap's system design, smart contracts, and workspace structure
+---
+
+# Architecture Overview
+
+StreamSwap's architecture is designed to support continuous and fair execution of token distribution through a modular, two-contract system.
+
+## System Design
+
+StreamSwap employs a factory pattern where the Controller Contract creates and manages multiple Stream Contracts. This design provides:
+
+- **Separation of concerns**: Protocol-level operations vs. stream-specific logic
+- **Scalability**: Each stream operates independently
+- **Upgradeability**: Contracts can be migrated without affecting existing streams
+- **Governance**: Centralized parameter management with decentralized execution
+
+<div className="my-8">
+  <img 
+    src="https://gist.github.com/user-attachments/assets/fa8e3b0b-6b31-48c4-86da-b0f1bae5bc45" 
+    alt="StreamSwap Architecture Diagram"
+    className="rounded-lg shadow-lg"
+  />
+  <p className="text-center text-sm text-gray-500 mt-2">StreamSwap system architecture showing the relationship between Controller and Stream contracts</p>
+</div>
+
+## Core Contracts
+
+### Controller Contract
+
+The Controller Contract serves as the protocol's central coordinator and factory.
+
+<Accordion title="Key Responsibilities">
+  - **Stream Creation**: Instantiates new stream contracts using the stored code ID
+  - **Parameter Management**: Maintains protocol-wide configuration (fees, durations, accepted denoms)
+  - **Fee Collection**: Collects stream creation fees and manages the fee collector address
+  - **Governance Interface**: Provides admin functions for protocol updates
+  - **Registry**: Tracks all created streams with unique IDs
+  - **Validation**: Enforces minimum durations and validates stream configuration
+</Accordion>
+
+#### Controller State
+
+```rust
+// Core parameters stored in the Controller
+PARAMS: Params {
+    stream_contract_code_id: u64,      // Code ID for stream instantiation
+    vesting_code_id: u64,               // Code ID for vesting contracts
+    protocol_admin: Addr,               // Admin address for governance
+    fee_collector: Addr,                // Address receiving fees
+    stream_creation_fee: Coin,          // Fee required to create a stream
+    exit_fee_percent: Decimal256,       // Exit fee percentage (0-100%)
+    accepted_in_denoms: Vec<String>,    // Whitelisted input denominations
+    min_waiting_duration: u64,          // Minimum waiting phase duration
+    min_bootstrapping_duration: u64,    // Minimum bootstrapping phase duration
+    min_stream_duration: u64,           // Minimum active stream duration
+    tos_version: String,                // Terms of service version
+}
+
+LAST_STREAM_ID: u64                     // Auto-incrementing stream ID
+STREAMS: Map<u64, Addr>                 // Maps stream ID to contract address
+FREEZESTATE: bool                       // Emergency freeze flag
+```
+
+#### Controller Operations
+
+<CardGroup cols={2}>
+  <Card title="CreateStream" icon="plus">
+    Validates parameters, instantiates a new stream contract, collects creation fee, and registers the stream.
+  </Card>
+  
+  <Card title="UpdateParams" icon="gear">
+    Admin-only function to update protocol parameters like fees, code IDs, and minimum durations.
+  </Card>
+  
+  <Card title="FreezeStreams" icon="snowflake">
+    Emergency function to pause all stream creation (does not affect existing streams).
+  </Card>
+  
+  <Card title="UpdateStreamAdmin" icon="user-shield">
+    Admin-only function to update the admin address for a specific stream.
+  </Card>
+</CardGroup>
+
+### Stream Contract
+
+Each Stream Contract manages an individual token swap stream with its own lifecycle and participants.
+
+<Accordion title="Key Responsibilities">
+  - **Subscription Management**: Handles user subscriptions with share calculations
+  - **Continuous Distribution**: Distributes tokens proportionally over time
+  - **Price Calculations**: Computes average and streamed prices in real-time
+  - **Position Tracking**: Maintains individual participant positions and spent amounts
+  - **Withdrawal Logic**: Processes withdrawals with proportional share reduction
+  - **Exit Processing**: Handles stream exits and refunds after completion
+  - **Finalization**: Executes treasury collection with exit fees
+  - **Post-Stream Actions**: Creates vesting schedules and liquidity pools
+  - **Threshold Validation**: Checks minimum raise requirements
+</Accordion>
+
+#### Stream State
+
+```rust
+// Stream state tracked throughout lifecycle
+STREAM_STATE: StreamState {
+    // Token configuration
+    out_asset: Coin,                    // Token being distributed
+    out_remaining: Uint256,             // Remaining tokens to distribute
+    in_denom: String,                   // Input token denomination
+    in_supply: Uint256,                 // Current subscribed input amount
+    spent_in: Uint256,                  // Total spent input tokens
+    
+    // Share tracking
+    shares: Uint256,                    // Total shares in the stream
+    dist_index: Decimal256,             // Distribution index for calculations
+    
+    // Pricing
+    current_streamed_price: Decimal256, // Latest streamed price
+    
+    // Timing and status
+    status_info: StatusInfo {
+        status: Status,                 // Current lifecycle status
+        bootstrapping_start_time: Timestamp,
+        start_time: Timestamp,
+        end_time: Timestamp,
+        last_updated: Timestamp,
+    },
+    
+    // Optional configurations
+    threshold: Option<Uint256>,         // Minimum raise threshold
+}
+
+// Individual participant positions
+POSITIONS: Map<Addr, Position> {
+    owner: Addr,
+    in_balance: Uint256,                // Unspent input balance
+    shares: Uint256,                    // Position shares
+    index: Decimal256,                  // Distribution index snapshot
+    spent: Uint256,                     // Spent input amount
+    purchased: Uint256,                 // Purchased output amount
+}
+
+// Stream metadata
+STREAM_INFO: StreamInfo {
+    name: String,
+    url: Option<String>,
+    treasury: Addr,
+    stream_admin: Addr,
+}
+
+// Post-stream configurations
+POST_STREAM: PostStreamActions {
+    pool_config: Option<PoolConfig>,
+    subscriber_vesting: Option<VestingConfig>,
+    creator_vesting: Option<VestingConfig>,
+}
+```
+
+#### Stream Operations
+
+<CardGroup cols={2}>
+  <Card title="Subscribe" icon="user-plus">
+    Join a stream during bootstrapping or active phase. Funds are pledged, shares are minted based on current exchange rate.
+  </Card>
+  
+  <Card title="Withdraw" icon="arrow-left">
+    Withdraw unspent tokens during the stream. Shares are reduced proportionally, maintaining fair distribution.
+  </Card>
+  
+  <Card title="ExitStream" icon="right-from-bracket">
+    Exit after stream ends. Receive distributed tokens and reclaim unspent input tokens.
+  </Card>
+  
+  <Card title="FinalizeStream" icon="flag-checkered">
+    Treasury finalizes stream to collect proceeds. Applies exit fee, checks threshold, triggers post-stream actions.
+  </Card>
+  
+  <Card title="CancelStream" icon="ban">
+    Stream admin cancels stream. Participants can withdraw all funds, treasury reclaims unsold tokens.
+  </Card>
+  
+  <Card title="UpdatePosition" icon="refresh">
+    Internal operation that syncs stream state and calculates distribution before most actions.
+  </Card>
+</CardGroup>
+
+## Stream Lifecycle States
+
+Streams progress through distinct phases with specific participant capabilities:
+
+<Steps>
+  <Step title="Waiting">
+    **Status**: Stream created but not yet active
+    
+    **Allowed Actions**:
+    - Cancel (stream admin)
+    - Update stream parameters (stream admin)
+    
+    **Restrictions**: No subscriptions or distributions
+  </Step>
+  
+  <Step title="Bootstrapping">
+    **Status**: Subscription phase before distribution begins
+    
+    **Allowed Actions**:
+    - Subscribe (users)
+    - Withdraw (users)
+    - Cancel (stream admin)
+    
+    **Restrictions**: No spending occurs, tokens are not distributed yet
+  </Step>
+  
+  <Step title="Active">
+    **Status**: Stream is live and distributing tokens
+    
+    **Allowed Actions**:
+    - Subscribe (users)
+    - Withdraw (users)
+    - Query positions and prices
+    
+    **Key Behavior**: Continuous distribution based on elapsed time and total shares
+  </Step>
+  
+  <Step title="Ended">
+    **Status**: Stream duration completed
+    
+    **Allowed Actions**:
+    - ExitStream (users)
+    - FinalizeStream (treasury)
+    - Cancel (stream admin)
+    
+    **Restrictions**: No new subscriptions or withdrawals
+  </Step>
+  
+  <Step title="Finalized">
+    **Status**: Treasury has collected proceeds
+    
+    **Allowed Actions**:
+    - ExitStream (users)
+    - Query final results
+    
+    **Post-Actions**: Vesting schedules created, pools established (if configured)
+  </Step>
+  
+  <Step title="Cancelled">
+    **Status**: Stream cancelled by admin
+    
+    **Allowed Actions**:
+    - ExitStream (users) - Full refund
+    - Treasury can reclaim unsold tokens
+    
+    **Behavior**: All participants receive full refunds of unspent amounts
+  </Step>
+</Steps>
+
+## Workspace Structure
+
+The StreamSwap codebase is organized as a Cargo workspace:
+
+```
+streamswap-contracts/
+├── contracts/
+│   ├── controller/
+│   │   ├── src/
+│   │   │   ├── contract.rs      # Main contract logic
+│   │   │   ├── error.rs         # Error definitions
+│   │   │   ├── state.rs         # State management
+│   │   │   ├── helpers.rs       # Helper functions
+│   │   │   └── lib.rs           # Module exports
+│   │   └── Cargo.toml
+│   │
+│   └── stream/
+│       ├── src/
+│       │   ├── contract.rs      # Main contract logic
+│       │   ├── error.rs         # Error definitions
+│       │   ├── state.rs         # State management
+│       │   ├── stream.rs        # Stream sync and calculations
+│       │   ├── pool.rs          # Pool creation logic
+│       │   ├── vesting.rs       # Vesting operations
+│       │   ├── circuit_ops.rs   # Circuit breaker operations
+│       │   └── lib.rs           # Module exports
+│       └── Cargo.toml
+│
+├── packages/
+│   ├── interface/
+│   │   └── src/
+│   │       ├── controller.rs    # Controller interface
+│   │       └── stream.rs        # Stream interface
+│   │
+│   ├── types/
+│   │   └── src/
+│   │       ├── controller/      # Controller messages and types
+│   │       ├── stream/          # Stream messages and types
+│   │       └── lib.rs
+│   │
+│   └── utils/
+│       └── src/                 # Shared utility functions
+│
+├── tests/
+│   └── src/                     # Integration tests
+│
+├── artifacts/                   # Compiled .wasm files
+├── scripts/                     # Build and deployment scripts
+└── Cargo.toml                   # Workspace configuration
+```
+
+### Package Dependencies
+
+- **contracts**: Depend on `packages/types` for message definitions
+- **interface**: Provides high-level API for interacting with contracts
+- **types**: Shared type definitions used across all packages
+- **utils**: Common utility functions for validations and calculations
+
+<Info>
+  The workspace structure enables code reuse and maintains clear boundaries between contract logic, type definitions, and utilities.
+</Info>
+
+## Distribution Algorithm
+
+StreamSwap's continuous distribution algorithm is the core innovation:
+
+### Time-Based Distribution
+
+```rust
+// Calculate distribution portion based on elapsed time
+let time_elapsed = now - last_updated;
+let total_duration = end_time - start_time;
+let distribution_ratio = time_elapsed / total_duration;
+
+// Distribute tokens proportionally
+let tokens_to_distribute = out_remaining * distribution_ratio;
+let input_to_spend = in_supply * distribution_ratio;
+
+// Update distribution index for all participants
+dist_index += tokens_to_distribute / total_shares;
+```
+
+### Share Calculations
+
+```rust
+// New subscription: shares based on current rate
+if shares == 0 {
+    new_shares = amount_in;  // First subscriber gets 1:1
+} else {
+    new_shares = (total_shares * amount_in) / in_supply;
+}
+
+// Individual distribution: based on shares and index
+user_purchased = user_shares * (current_dist_index - user_index);
+```
+
+### Price Calculations
+
+<CardGroup cols={2}>
+  <Card title="Average Price">
+    ```rust
+    avg_price = spent_in / (out_supply - out_remaining)
+    ```
+    
+    The overall average price paid per output token.
+  </Card>
+  
+  <Card title="Streamed Price">
+    ```rust
+    streamed_price = spent_in_delta / distributed_out_delta
+    ```
+    
+    The price for the most recent distribution event.
+  </Card>
+</CardGroup>
+
+## Key Design Patterns
+
+### Circuit Breaker
+
+The Controller implements a freeze mechanism to pause stream creation in emergencies without affecting existing streams.
+
+### Distribution Index
+
+Using a distribution index pattern allows efficient tracking of per-user distributions without iterating over all users.
+
+### State Synchronization
+
+Stream state is lazily updated on user interactions, ensuring efficient gas usage while maintaining accurate distributions.
+
+### Factory Pattern
+
+Controller acts as a factory, creating isolated stream instances with consistent parameters and interfaces.
+
+## Security Considerations
+
+<Warning>
+  **Key Security Features**:
+  - Threshold validation prevents finalization below minimum raise
+  - Exit fees discourage late-stage manipulation
+  - Admin controls separated from treasury operations
+  - Circuit breaker for emergency situations
+  - Comprehensive validation of timing parameters
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Build and test the contracts locally.
+  </Card>
+  
+  <Card title="Stream Lifecycle" icon="timeline" href="/concepts/stream-lifecycle">
+    Dive deeper into stream phases and transitions.
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore contract messages and queries.
+  </Card>
+</CardGroup>

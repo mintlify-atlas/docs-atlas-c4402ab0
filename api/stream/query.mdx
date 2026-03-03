@@ -1,0 +1,629 @@
+---
+title: Stream Query Messages
+description: Read-only operations for Stream contracts
+icon: 'magnifying-glass'
+---
+
+## QueryMsg
+
+Each Stream contract supports the following query operations:
+
+```rust
+pub enum QueryMsg {
+    Params {},
+    Stream {},
+    Position { owner: String },
+    ListPositions {
+        start_after: Option<String>,
+        limit: Option<u32>,
+    },
+    AveragePrice {},
+    LastStreamedPrice {},
+    ToS { addr: Option<String> },
+    CreatorVesting {},
+    SubscriberVesting { addr: String },
+}
+```
+
+---
+
+## Params
+
+Retrieve the controller parameters snapshot that was stored when this stream was created.
+
+### Query
+
+```json
+{
+  "params": {}
+}
+```
+
+### Response
+
+Returns the `Params` structure from the controller (see [Controller Query API](/api/controller/query)).
+
+<Note>
+  These parameters are frozen at stream creation time. Changes to controller parameters do not affect existing streams.
+</Note>
+
+### Example
+
+```typescript
+const params = await client.queryContractSmart(streamAddress, {
+  params: {},
+});
+
+console.log("Exit fee:", params.exit_fee_percent);
+```
+
+---
+
+## Stream
+
+Get the current state of the stream.
+
+### Query
+
+```json
+{
+  "stream": {}
+}
+```
+
+### Response
+
+```rust
+pub struct StreamResponse {
+    pub name: String,
+    pub treasury: String,
+    pub url: Option<String>,
+    pub dist_index: Decimal256,
+    pub last_updated: Timestamp,
+    pub out_asset: Coin,
+    pub out_remaining: Uint256,
+    pub in_denom: String,
+    pub in_supply: Uint256,
+    pub spent_in: Uint256,
+    pub shares: Uint256,
+    pub start_time: Timestamp,
+    pub end_time: Timestamp,
+    pub current_streamed_price: Decimal256,
+    pub status: Status,
+    pub stream_admin: String,
+    pub threshold: Option<Uint256>,
+}
+```
+
+### Response Fields
+
+<ResponseField name="name" type="string">
+  Human-readable name of the stream.
+</ResponseField>
+
+<ResponseField name="treasury" type="string">
+  Address that receives revenue when stream is finalized.
+</ResponseField>
+
+<ResponseField name="url" type="string">
+  Optional URL with additional information.
+</ResponseField>
+
+<ResponseField name="dist_index" type="Decimal256">
+  Distribution index - amount of `out_asset` tokens each share is entitled to.
+  
+  Used to calculate position purchases: `purchased = shares * dist_index`
+</ResponseField>
+
+<ResponseField name="last_updated" type="Timestamp">
+  Nanosecond timestamp when stream was last synced.
+</ResponseField>
+
+<ResponseField name="out_asset" type="Coin">
+  Total amount of tokens being distributed (initial amount).
+</ResponseField>
+
+<ResponseField name="out_remaining" type="Uint256">
+  Amount of `out_asset` tokens remaining to be distributed.
+</ResponseField>
+
+<ResponseField name="in_denom" type="string">
+  Denomination of tokens accepted for subscriptions.
+</ResponseField>
+
+<ResponseField name="in_supply" type="Uint256">
+  Total unspent `in_denom` tokens in all positions.
+</ResponseField>
+
+<ResponseField name="spent_in" type="Uint256">
+  Total `in_denom` tokens spent purchasing `out_asset`.
+  
+  `in_supply + spent_in = total subscribed`
+</ResponseField>
+
+<ResponseField name="shares" type="Uint256">
+  Total shares across all positions.
+</ResponseField>
+
+<ResponseField name="start_time" type="Timestamp">
+  Nanosecond timestamp when active streaming begins.
+</ResponseField>
+
+<ResponseField name="end_time" type="Timestamp">
+  Nanosecond timestamp when streaming ends.
+</ResponseField>
+
+<ResponseField name="current_streamed_price" type="Decimal256">
+  Current instantaneous price of `out_asset` in terms of `in_denom`.
+  
+  Price increases over time as tokens are released.
+</ResponseField>
+
+<ResponseField name="status" type="Status">
+  Current stream status. See [StreamState documentation](/api/types/stream-state).
+  
+  Possible values:
+  - `Waiting`
+  - `Bootstrapping`
+  - `Active`
+  - `Ended`
+  - `Finalized(ThresholdReached)`
+  - `Finalized(ThresholdNotReached)`
+  - `Cancelled`
+</ResponseField>
+
+<ResponseField name="stream_admin" type="string">
+  Address authorized to finalize and cancel (in waiting) the stream.
+</ResponseField>
+
+<ResponseField name="threshold" type="Uint256">
+  Optional minimum `spent_in` required for stream success.
+</ResponseField>
+
+### Example
+
+```typescript
+const stream = await client.queryContractSmart(streamAddress, {
+  stream: {},
+});
+
+console.log("Status:", stream.status);
+console.log("Out remaining:", stream.out_remaining);
+console.log("Total spent:", stream.spent_in);
+console.log("Current price:", stream.current_streamed_price);
+
+// Calculate progress
+const totalOut = BigInt(stream.out_asset.amount);
+const distributed = totalOut - BigInt(stream.out_remaining);
+const progress = Number(distributed * 100n / totalOut);
+console.log(`Distribution progress: ${progress.toFixed(2)}%`);
+```
+
+---
+
+## Position
+
+Get the state of a specific subscriber's position.
+
+### Query
+
+```json
+{
+  "position": {
+    "owner": "osmo1..."
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="owner" type="string" required>
+  Address of the position owner.
+</ParamField>
+
+### Response
+
+```rust
+pub struct PositionResponse {
+    pub owner: String,
+    pub in_balance: Uint256,
+    pub shares: Uint256,
+    pub index: Decimal256,
+    pub last_updated: Timestamp,
+    pub purchased: Uint256,
+    pub pending_purchase: Decimal256,
+    pub spent: Uint256,
+    pub exit_date: Timestamp,
+}
+```
+
+### Response Fields
+
+<ResponseField name="owner" type="string">
+  Address of the position owner.
+</ResponseField>
+
+<ResponseField name="in_balance" type="Uint256">
+  Current unspent balance of `in_denom` tokens.
+  
+  This can be withdrawn during Bootstrapping or Active phases.
+</ResponseField>
+
+<ResponseField name="shares" type="Uint256">
+  Number of shares this position owns.
+  
+  Determines portion of distributed tokens: `share / total_shares`
+</ResponseField>
+
+<ResponseField name="index" type="Decimal256">
+  Position's distribution index (synced to stream's dist_index).
+  
+  Used to calculate new purchases since last sync.
+</ResponseField>
+
+<ResponseField name="last_updated" type="Timestamp">
+  Nanosecond timestamp when position was last synced.
+</ResponseField>
+
+<ResponseField name="purchased" type="Uint256">
+  Total `out_asset` tokens purchased at last sync.
+</ResponseField>
+
+<ResponseField name="pending_purchase" type="Decimal256">
+  Fractional purchase amount (due to decimal truncation).
+  
+  Carried forward to next sync to prevent loss of precision.
+</ResponseField>
+
+<ResponseField name="spent" type="Uint256">
+  Total `in_denom` tokens spent purchasing `out_asset`.
+</ResponseField>
+
+<ResponseField name="exit_date" type="Timestamp">
+  Nanosecond timestamp when position exited.
+  
+  `0` if not yet exited.
+</ResponseField>
+
+### Example
+
+```typescript
+const position = await client.queryContractSmart(streamAddress, {
+  position: { owner: userAddress },
+});
+
+console.log("Shares:", position.shares);
+console.log("Purchased:", position.purchased);
+console.log("Spent:", position.spent);
+console.log("Unspent balance:", position.in_balance);
+
+// Check if exited
+if (position.exit_date !== "0") {
+  console.log("Position exited at:", new Date(Number(position.exit_date) / 1_000_000));
+}
+```
+
+---
+
+## ListPositions
+
+Retrieve a paginated list of all positions in the stream.
+
+### Query
+
+```json
+{
+  "list_positions": {
+    "start_after": "osmo1...",
+    "limit": 20
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="start_after" type="string">
+  Optional address to start pagination after. Omit to start from the beginning.
+</ParamField>
+
+<ParamField path="limit" type="u32" default="30">
+  Maximum number of positions to return. Capped at 30.
+</ParamField>
+
+### Response
+
+```rust
+pub struct PositionsResponse {
+    pub positions: Vec<PositionResponse>,
+}
+```
+
+<ResponseField name="positions" type="Vec<PositionResponse>">
+  Array of position responses. See [Position](#position) for field details.
+</ResponseField>
+
+### Example: Paginate All Positions
+
+```typescript
+async function getAllPositions(client, streamAddress) {
+  const allPositions = [];
+  let startAfter = undefined;
+  
+  while (true) {
+    const response = await client.queryContractSmart(streamAddress, {
+      list_positions: {
+        start_after: startAfter,
+        limit: 30,
+      },
+    });
+    
+    allPositions.push(...response.positions);
+    
+    if (response.positions.length < 30) {
+      break;
+    }
+    
+    startAfter = response.positions[response.positions.length - 1].owner;
+  }
+  
+  return allPositions;
+}
+
+const positions = await getAllPositions(client, streamAddress);
+console.log(`Total positions: ${positions.length}`);
+```
+
+---
+
+## AveragePrice
+
+Calculate the average price paid for all tokens sold so far.
+
+### Query
+
+```json
+{
+  "average_price": {}
+}
+```
+
+### Response
+
+```rust
+pub struct AveragePriceResponse {
+    pub average_price: Decimal256,
+}
+```
+
+<ResponseField name="average_price" type="Decimal256">
+  Average price in `in_denom` per `out_asset` token.
+  
+  Calculated as: `spent_in / (total_out - out_remaining)`
+</ResponseField>
+
+### Example
+
+```typescript
+const { average_price } = await client.queryContractSmart(streamAddress, {
+  average_price: {},
+});
+
+console.log(`Average price: ${average_price} OSMO per TOKEN`);
+```
+
+---
+
+## LastStreamedPrice
+
+Get the current instantaneous streaming price.
+
+### Query
+
+```json
+{
+  "last_streamed_price": {}
+}
+```
+
+### Response
+
+```rust
+pub struct LatestStreamedPriceResponse {
+    pub current_streamed_price: Decimal256,
+}
+```
+
+<ResponseField name="current_streamed_price" type="Decimal256">
+  Current price at which tokens are being streamed.
+  
+  This price increases over time as tokens are released. It represents the marginal price, not the average.
+</ResponseField>
+
+### Example
+
+```typescript
+const { current_streamed_price } = await client.queryContractSmart(streamAddress, {
+  last_streamed_price: {},
+});
+
+console.log(`Current streaming price: ${current_streamed_price}`);
+```
+
+### Price Comparison
+
+```typescript
+const [avgPriceRes, currentPriceRes] = await Promise.all([
+  client.queryContractSmart(streamAddress, { average_price: {} }),
+  client.queryContractSmart(streamAddress, { last_streamed_price: {} }),
+]);
+
+const avgPrice = parseFloat(avgPriceRes.average_price);
+const currentPrice = parseFloat(currentPriceRes.current_streamed_price);
+
+console.log(`Average: ${avgPrice.toFixed(6)}`);
+console.log(`Current: ${currentPrice.toFixed(6)}`);
+console.log(`Discount: ${((1 - avgPrice / currentPrice) * 100).toFixed(2)}%`);
+```
+
+---
+
+## ToS
+
+Query Terms of Service information.
+
+### Query Current ToS Version
+
+```json
+{
+  "to_s": {}
+}
+```
+
+Returns the ToS version for the stream.
+
+### Query User's Accepted ToS
+
+```json
+{
+  "to_s": {
+    "addr": "osmo1..."
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="addr" type="string">
+  Optional address to check which ToS version they accepted.
+  
+  Omit to get the stream's current ToS version.
+</ParamField>
+
+### Response
+
+Returns a string with the ToS version identifier.
+
+### Example
+
+```typescript
+// Get stream's ToS version
+const streamTos = await client.queryContractSmart(streamAddress, {
+  to_s: {},
+});
+
+// Get user's accepted ToS
+const userTos = await client.queryContractSmart(streamAddress, {
+  to_s: { addr: userAddress },
+});
+
+console.log(`Stream ToS: ${streamTos}`);
+console.log(`User accepted: ${userTos}`);
+console.log(`Match: ${streamTos === userTos}`);
+```
+
+---
+
+## CreatorVesting
+
+Get the creator's vesting contract address (if vesting was configured).
+
+### Query
+
+```json
+{
+  "creator_vesting": {}
+}
+```
+
+### Response
+
+Returns a string with the vesting contract address, or empty string if:
+- No creator vesting was configured
+- Stream not yet finalized
+
+### Example
+
+```typescript
+const vestingAddr = await client.queryContractSmart(streamAddress, {
+  creator_vesting: {},
+});
+
+if (vestingAddr) {
+  console.log("Creator vesting contract:", vestingAddr);
+  
+  // Query vesting contract for details
+  const vestingInfo = await client.queryContractSmart(vestingAddr, {
+    vesting_account: {},
+  });
+  console.log("Vesting info:", vestingInfo);
+} else {
+  console.log("No creator vesting configured");
+}
+```
+
+---
+
+## SubscriberVesting
+
+Get a subscriber's vesting contract address (if vesting was configured).
+
+### Query
+
+```json
+{
+  "subscriber_vesting": {
+    "addr": "osmo1..."
+  }
+}
+```
+
+### Parameters
+
+<ParamField path="addr" type="string" required>
+  Address of the subscriber to query.
+</ParamField>
+
+### Response
+
+Returns a string with the vesting contract address, or empty string if:
+- No subscriber vesting was configured
+- Subscriber hasn't exited yet
+- Subscriber doesn't exist
+
+### Example
+
+```typescript
+const vestingAddr = await client.queryContractSmart(streamAddress, {
+  subscriber_vesting: { addr: userAddress },
+});
+
+if (vestingAddr) {
+  console.log("Subscriber vesting contract:", vestingAddr);
+  
+  // Query vesting details
+  const vestingInfo = await client.queryContractSmart(vestingAddr, {
+    vesting_account: {},
+  });
+  console.log("Vesting schedule:", vestingInfo);
+} else {
+  console.log("No vesting contract (not exited or no vesting configured)");
+}
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Execute Messages" icon="bolt" href="/api/stream/execute">
+    Learn about stream operations
+  </Card>
+  
+  <Card title="StreamState Type" icon="code" href="/api/types/stream-state">
+    Understand stream state structure
+  </Card>
+  
+  <Card title="Position Type" icon="user" href="/api/types/position">
+    Understand position structure
+  </Card>
+</CardGroup>

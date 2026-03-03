@@ -1,0 +1,447 @@
+---
+title: 'Subscribing to Streams'
+description: 'Learn how to subscribe to StreamSwap streams and manage your subscription'
+---
+
+Subscribers can participate in streams by sending tokens and receiving streamed tokens over time. This guide covers subscription mechanics, share calculations, and withdrawal functionality.
+
+## Overview
+
+Subscription allows users to:
+- Deposit `in_denom` tokens during bootstrapping or active phases
+- Receive proportional shares of the token distribution
+- Withdraw unspent tokens at any time
+- Track purchased tokens and spending in real-time
+
+## Subscribe Message
+
+To subscribe to a stream, send the `Subscribe` message with funds:
+
+```rust
+use streamswap_types::stream::ExecuteMsg;
+
+let subscribe_msg = ExecuteMsg::Subscribe {};
+
+let res = app.execute_contract(
+    subscriber_address,
+    stream_contract_address,
+    &subscribe_msg,
+    &[coin(1000, "uosmo")] // Amount to subscribe
+)?;
+```
+
+<Note>
+The subscription amount must be in the stream's `in_denom`. Any other denomination will be rejected.
+</Note>
+
+## When to Subscribe
+
+Subscriptions are accepted during two phases:
+
+### Bootstrapping Phase
+
+Between `bootstraping_start_time` and `start_time`:
+
+- Tokens are accepted but not yet distributed
+- No spending occurs during this phase
+- All bootstrapping subscribers get shares before distribution begins
+- Distribution index remains at zero
+
+**Example:**
+```rust
+// Subscribe during bootstrapping
+app.set_block_time(bootstrapping_start_time);
+
+let res = app.execute_contract(
+    subscriber,
+    stream_address,
+    &ExecuteMsg::Subscribe {},
+    &[coin(150, "in_denom")]
+)?;
+
+// Query stream state
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Stream {}
+)?;
+
+assert_eq!(stream.status, Status::Bootstrapping);
+assert_eq!(stream.dist_index, Decimal256::zero()); // No distribution yet
+```
+
+### Active Phase
+
+From `start_time` to `end_time`:
+
+- Token distribution is actively happening
+- New subscriptions receive shares at current distribution index
+- Tokens begin spending immediately based on time elapsed
+
+**Example:**
+```rust
+// Subscribe during active phase
+app.set_block_time(start_time.plus_seconds(10));
+
+let res = app.execute_contract(
+    subscriber,
+    stream_address,
+    &ExecuteMsg::Subscribe {},
+    &[coin(150, "in_denom")]
+)?;
+
+// Stream is now active with distribution
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Stream {}
+)?;
+
+assert_eq!(stream.status, Status::Active);
+assert!(stream.dist_index > Decimal256::zero()); // Distribution happening
+```
+
+<Warning>
+Subscriptions are **not allowed** during:
+- Waiting phase (before `bootstraping_start_time`)
+- Ended phase (after `end_time`)
+- Cancelled or Finalized states
+</Warning>
+
+## Share Calculation
+
+Shares determine your proportional claim on the distributed tokens.
+
+### First Subscription (1:1 Ratio)
+
+When a stream has no existing shares:
+
+```rust
+if stream.shares.is_zero() {
+    new_shares = subscription_amount
+}
+```
+
+**Example:**
+- Subscriber deposits 1000 tokens
+- Receives 1000 shares
+- Share ratio: 1:1
+
+### Subsequent Subscriptions
+
+When shares already exist:
+
+```rust
+new_shares = (subscription_amount * existing_shares) / existing_in_supply
+```
+
+**Example:**
+- Stream has 1000 shares and 800 in_supply (200 already spent)
+- Subscriber deposits 400 tokens
+- Receives: (400 × 1000) / 800 = 500 shares
+- Total shares: 1500
+
+### Bootstrapping vs Active Differences
+
+<Tabs>
+  <Tab title="Bootstrapping">
+    During bootstrapping, the formula is simpler:
+    
+    ```rust
+    // No distribution yet, so in_supply equals sum of all subscriptions
+    new_shares = (subscription_amount * total_shares) / total_in_supply
+    ```
+    
+    All subscribers get shares proportional to their deposit with no spending.
+  </Tab>
+  
+  <Tab title="Active">
+    During active phase, spending affects the calculation:
+    
+    ```rust
+    // in_supply decreases as tokens are spent
+    // This means new subscribers get more shares per token
+    new_shares = (subscription_amount * total_shares) / remaining_in_supply
+    ```
+    
+    Later subscribers get better share ratios as early subscribers' tokens are spent.
+  </Tab>
+</Tabs>
+
+## Position Tracking
+
+Each subscriber has a position tracking their state:
+
+```rust
+pub struct Position {
+    pub owner: Addr,
+    pub in_balance: Uint256,      // Remaining unspent tokens
+    pub shares: Uint256,           // Share amount
+    pub index: Decimal256,         // Last sync index
+    pub last_updated: Timestamp,   // Last update time
+    pub purchased: Uint256,        // Total tokens purchased
+    pub pending_purchase: Decimal256, // Fractional purchases
+    pub spent: Uint256,            // Total tokens spent
+    pub exit_date: Timestamp,      // When exited (0 if active)
+}
+```
+
+### Querying Your Position
+
+```rust
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Position {
+        owner: subscriber_address.to_string()
+    }
+)?;
+
+println!("Shares: {}", position.shares);
+println!("Remaining balance: {}", position.in_balance);
+println!("Purchased: {}", position.purchased);
+println!("Spent: {}", position.spent);
+```
+
+## Recurring Subscriptions
+
+You can subscribe multiple times to the same stream:
+
+```rust
+// First subscription
+app.execute_contract(
+    subscriber,
+    stream_address,
+    &ExecuteMsg::Subscribe {},
+    &[coin(150, "in_denom")]
+)?;
+
+// Later, add more
+app.execute_contract(
+    subscriber,
+    stream_address,
+    &ExecuteMsg::Subscribe {},
+    &[coin(150, "in_denom")]
+)?;
+```
+
+<Steps>
+  <Step title="Stream is synced">
+    Current distribution is calculated up to the block time.
+  </Step>
+  
+  <Step title="Position is synced">
+    Your purchased amount and spent tokens are updated based on the distribution.
+  </Step>
+  
+  <Step title="New shares calculated">
+    Additional shares are computed based on current state.
+  </Step>
+  
+  <Step title="Balances updated">
+    Your `in_balance` and `shares` are increased.
+  </Step>
+</Steps>
+
+**Example:**
+```rust
+// Subscribe at start_time
+app.set_block_time(start_time);
+subscribe(subscriber, 150);
+
+// Position after first subscription
+let pos = query_position(subscriber);
+assert_eq!(pos.shares, 150);
+assert_eq!(pos.in_balance, 150);
+assert_eq!(pos.spent, 0);
+
+// Subscribe again 10 seconds later
+app.set_block_time(start_time.plus_seconds(10));
+subscribe(subscriber, 150);
+
+// Position is updated with spending
+let pos = query_position(subscriber);
+assert_eq!(pos.shares, 300); // Original 150 + new 150
+assert_eq!(pos.in_balance, 285); // Some tokens were spent
+assert_eq!(pos.spent, 15); // Tokens spent in 10 seconds
+```
+
+## Withdraw Functionality
+
+Subscribers can withdraw unspent tokens at any time during active or bootstrapping phases.
+
+### Full Withdrawal
+
+Withdraw all remaining `in_balance`:
+
+```rust
+let withdraw_msg = ExecuteMsg::Withdraw { cap: None };
+
+let res = app.execute_contract(
+    subscriber,
+    stream_address,
+    &withdraw_msg,
+    &[]
+)?;
+```
+
+### Partial Withdrawal
+
+Withdraw a specific amount:
+
+```rust
+let withdraw_msg = ExecuteMsg::Withdraw {
+    cap: Some(Uint256::from(500u128))
+};
+
+let res = app.execute_contract(
+    subscriber,
+    stream_address,
+    &withdraw_msg,
+    &[]
+)?;
+```
+
+<Warning>
+Withdrawing reduces both your `in_balance` and `shares` proportionally. This affects your future token distribution.
+</Warning>
+
+### Withdrawal Mechanics
+
+<Steps>
+  <Step title="Position synced">
+    Your position is updated to reflect current distribution and spending.
+  </Step>
+  
+  <Step title="Shares calculated">
+    Shares to remove are calculated based on withdrawal amount.
+  </Step>
+  
+  <Step title="State updated">
+    Stream's `in_supply` and `shares` are decreased.
+    Your position's `in_balance` and `shares` are decreased.
+  </Step>
+  
+  <Step title="Tokens sent">
+    Withdrawn tokens are sent back to your address.
+  </Step>
+</Steps>
+
+**Example:**
+```rust
+// Initial position
+let pos = query_position(subscriber);
+assert_eq!(pos.in_balance, 1000);
+assert_eq!(pos.shares, 1000);
+
+// Withdraw half
+let res = execute_withdraw(subscriber, Some(500));
+
+// Updated position
+let pos = query_position(subscriber);
+assert_eq!(pos.in_balance, 500);
+assert_eq!(pos.shares, 500); // Proportionally reduced
+```
+
+## Terms of Service
+
+When you first subscribe to a stream, you automatically accept the stream's terms of service:
+
+```rust
+// Query TOS version for the stream
+let tos_version: String = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::ToS { addr: None }
+)?;
+
+// Query your signed TOS version
+let signed_tos: String = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::ToS {
+        addr: Some(subscriber.to_string())
+    }
+)?;
+
+assert_eq!(tos_version, signed_tos);
+```
+
+## Real-World Example
+
+Complete subscription workflow:
+
+```rust
+use cosmwasm_std::{coin, Addr};
+use streamswap_types::stream::{ExecuteMsg, QueryMsg, PositionResponse};
+
+// 1. Check stream status
+let stream: StreamResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Stream {}
+)?;
+
+if stream.status != Status::Active && stream.status != Status::Bootstrapping {
+    return Err("Stream not accepting subscriptions");
+}
+
+// 2. Subscribe with tokens
+let amount = 1000u128;
+let res = app.execute_contract(
+    subscriber_addr.clone(),
+    stream_address.clone(),
+    &ExecuteMsg::Subscribe {},
+    &[coin(amount, stream.in_denom.as_str())]
+)?;
+
+// 3. Check your position
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address.clone(),
+    &QueryMsg::Position {
+        owner: subscriber_addr.to_string()
+    }
+)?;
+
+println!("Your shares: {}", position.shares);
+println!("Your balance: {}", position.in_balance);
+
+// 4. Later, check purchased tokens
+app.set_block_time(current_time.plus_seconds(3600));
+
+// Sync position to update purchases
+app.execute_contract(
+    subscriber_addr.clone(),
+    stream_address.clone(),
+    &ExecuteMsg::SyncPosition {},
+    &[]
+)?;
+
+// Query updated position
+let position: PositionResponse = app.query_wasm_smart(
+    stream_address,
+    &QueryMsg::Position {
+        owner: subscriber_addr.to_string()
+    }
+)?;
+
+println!("Tokens purchased: {}", position.purchased);
+println!("Tokens spent: {}", position.spent);
+println!("Remaining balance: {}", position.in_balance);
+```
+
+## Error Handling
+
+Common subscription errors:
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `NoFunds` | No tokens sent | Include tokens in transaction |
+| `MissingDenom` | Wrong denom sent | Send stream's `in_denom` |
+| `OperationNotAllowed` | Wrong phase | Subscribe during bootstrapping/active only |
+| `Unauthorized` | Position ownership issue | Use correct subscriber address |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Managing Positions" icon="chart-line" href="/guides/managing-positions">
+    Learn to sync and track your position
+  </Card>
+  <Card title="Exiting Streams" icon="right-from-bracket" href="/guides/finalizing-streams#subscriber-exit">
+    Exit after stream ends to claim tokens
+  </Card>
+</CardGroup>
